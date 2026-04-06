@@ -1,0 +1,26 @@
+git add README.mdversion: "3.9"
+
+services:
+  frontend:
+    image: frontend
+    container_name: frontend
+    ports:
+      - "80:3000"
+    depends_on:
+      - backend
+    networks:
+      - appnet
+
+  backend:
+    image: backend
+    container_name: backend
+    ports:
+      - "1004:1004"
+    env_file:
+      - .env                 # ✅ Load Mongo URI + other vars from .env
+    networks:
+      - appnet
+
+networks:
+  appnet:
+    driver: bridge
