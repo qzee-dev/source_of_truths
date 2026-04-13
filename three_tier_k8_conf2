@@ -1,0 +1,308 @@
+====================================================================================
+🧱 Architecture Overview
+=========================================================================================
+User
+ ↓
+Ingress
+ ↓
+Frontend Service  →  Frontend Pod
+                         ↓ (HTTP call)
+                  Backend Service  →  Backend Pod
+                                          ↓
+                                     MongoDB Service → MongoDB Pod
+====================================================================================
+📁 Namespace
+====================================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+====================================================================================
+🔐 Service Account + RBAC (shared)
+=====================================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-sa
+  namespace: app
+====================================================================================
+#Role
+=====================================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-role
+  namespace: app
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list"]
+====================================================================================
+#RoleBinding
+=====================================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-rolebinding
+  namespace: app
+subjects:
+- kind: ServiceAccount
+  name: app-sa
+roleRef:
+  kind: Role
+  name: app-role
+  apiGroup: rbac.authorization.k8s.io
+====================================================================================
+MongoDB Secret
+=====================================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongo-secret
+  namespace: app
+type: Opaque
+stringData:
+  MONGO_INITDB_ROOT_USERNAME: admin
+  MONGO_INITDB_ROOT_PASSWORD: password
+====================================================================================
+MongoDB Deployment
+=====================================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+      - name: mongo
+        image: mongo:7
+        ports:
+        - containerPort: 27017
+        envFrom:
+        - secretRef:
+            name: mongo-secret
+====================================================================================
+MongoDB Service
+=====================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: app
+spec:
+  selector:
+    app: mongo
+  ports:
+  - port: 27017
+  type: ClusterIP
+
+====================================================================================
+=====================================================================================
+⚙ BACKEND API BACKEND CONFIGMAP
+====================================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: app
+data:
+  MONGO_HOST: mongo
+  MONGO_PORT: "27017"
+
+=====================================================================================
+Backend Deployment
+=====================================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      serviceAccountName: app-sa
+      containers:
+      - name: backend
+        image: your-backend-image:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: MONGO_USER
+          valueFrom:
+            secretKeyRef:
+              name: mongo-secret
+              key: MONGO_INITDB_ROOT_USERNAME
+        - name: MONGO_PASS
+          valueFrom:
+            secretKeyRef:
+              name: mongo-secret
+              key: MONGO_INITDB_ROOT_PASSWORD
+        envFrom:
+        - configMapRef:
+            name: backend-config
+=====================================================================================
+Backend Service
+=====================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: app
+spec:
+  selector:
+    app: backend
+  ports:
+  - port: 5000
+    targetPort: 5000
+  type: ClusterIP
+
+
+=====================================================================================
+🎨 Frontend
+=====================================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: app
+data:
+  API_URL: http://backend:5000
+
+
+=====================================================================================
+Frontend Deployment
+=====================================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      serviceAccountName: app-sa
+      containers:
+      - name: frontend
+        image: your-frontend-image:latest
+        ports:
+        - containerPort: 80
+        envFrom:
+        - configMapRef:
+            name: frontend-config
+=====================================================================================
+Frontend Service
+=====================================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: app
+spec:
+  selector:
+    app: frontend
+  ports:
+  - port: 80
+  type: ClusterIP
+=====================================================================================
+🌍 Ingress (User Access)
+=====================================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: app
+spec:
+  rules:
+  - host: myapp.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              number: 80
+=====================================================================================
+✅ Key Concepts You Just Implemented
+✔ Frontend → Backend communication via Service DNS
+✔ Backend → MongoDB via internal service name
+✔ Secure credentials via Secrets
+✔ Config via ConfigMaps
+✔ Network exposure via Ingress
+✔ Least privilege via RBAC
+=====================================================================================
+✅ Path‑based Ingress for Frontend and Backend
+We’ll create one Ingress that routes traffic like this:
+
+URL Path                        RoutedTo
+/                               Frontend service
+/api                            Backend service
+============================================================
+✅ Correct Path‑Based Ingress YAML
+============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: app
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  rules:
+  - host: myapp.local
+    http:
+      paths:
+      # Frontend
+      - path: /(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend
+            port:
+              number: 80
+
+      # Backend API
+      - path: /api(/|$)(.*)
+        pathType: Prefix
+        backend:
+          service:
+            name: backend
+            port:
+              number: 5000
+
+
+
+
+
+
+
+
+
+
+
+
+
