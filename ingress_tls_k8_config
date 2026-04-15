@@ -1,0 +1,99 @@
+🚀 Overview (What we’re doing)
+Install cert-manager
+Create a ClusterIssuer (Let’s Encrypt)
+Update your Ingress to request a certificate
+cert-manager automatically creates the banking-tls secret 🎯
+=======================================================================================
+1️⃣ Install cert-manager
+
+Run:
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+kubectl get pods -n cert-manager
+================================================================================================================
+2️⃣ Create a ClusterIssuer (Let’s Encrypt)
+
+This tells Kubernetes how to get certificates.
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: your-email@example.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+
+Apply it:
+
+kubectl apply -f cluster-issuer.yaml
+==========================================================================================================
+3️⃣ Update Your Ingress
+
+Now modify your Ingress to use cert-manager �
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  namespace: banking
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - banking.example.com
+      secretName: banking-tls
+  rules:
+    - host: banking.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+                  
+                  
+Apply:
+
+kubectl apply -f ingress.yaml�
+================================================================================================================
+4️⃣ What Happens Next 🔄
+
+cert-manager will:
+
+Detect the Ingress
+Contact Let's Encrypt
+Perform HTTP challenge via your Ingress
+Generate TLS cert
+Automatically create:
+
+##secretName: banking-tls##
+i)kubectl get certificate -n banking
+ii)kubectl describe certificate banking-tls -n banking
+iii)kubectl get secret banking-tls -n banking
+iv)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
