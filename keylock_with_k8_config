@@ -215,6 +215,114 @@ Spring Environment
         ↓
 OAuth2 + Keycloak ✅
 =======================================================================================
+✅ Option A: Simple HTTP Ingress (for dev / test)
+✅ k8s/api-gateway/ingress.yaml
+====================================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  namespace: banking
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  rules:
+    - host: banking.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+===============================================================================================================
+✅ Option B: HTTPS Ingress (RECOMMENDED for Keycloak)
+Since you’re using OAuth2 + Keycloak, HTTPS is strongly recommended.
+✅ HTTPS‑enabled Ingress
+===============================================================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  namespace: banking
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - banking.example.com
+      secretName: banking-tls
+  rules:
+    - host: banking.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+``
+------------------------------------------------------------------------------------------------------------
+✅ Updated deployment.yaml (probe section added)
+==============================================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: banking
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: your-repo/api-gateway:latest
+          ports:
+            - containerPort: 8080
 
+          # ✅ LIVENESS PROBE
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
 
+          # ✅ READINESS PROBE
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          envFrom:
+            - configMapRef:
+                name: api-gateway-config
+            - secretRef:
+                name: api-gateway-keycloak-secret
+
+          volumeMounts:
+            - name: gateway-config
+              mountPath: /config
+
+      volumes:
+        - name: gateway-config
+          configMap:
+            name: api-gateway-config
+===========================================================================================
 
