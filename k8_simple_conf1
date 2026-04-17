@@ -126,3 +126,86 @@ kubectl apply -f service.yaml
 kubectl apply -f ingress.yaml
 =====================================
 
+======================================================================================================================
+Install NGINX Ingress Controller in the vcluster
+1.1 Add the Helm repo (inside vcluster context)
+=================================================================================================================
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+1.2 Install Ingress Controller
+For vcluster, NodePort is usually safest, because:
+
+vcluster does not own cloud load balancers
+------------------------------------------------------------------------------------------------------
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  --create-namespace \
+  --set controller.service.type=NodePort
+---------------------------------------------------------------------------------------------------------
+✅ This installs:
+
+Ingress Controller pods
+Ingress Service
+Admission webhooks
+Traffic comes via the host cluster
+
+1.3 Confirm Installation
+kubectl get pods -n ingress-nginx
+kubectl get svc -n ingress-nginx
+================================================================================================================
+STEP 2 – Ensure API Gateway Is Internal (ClusterIP)
+Your API Gateway must NOT be LoadBalancer.
+✅ Correct service:
+===========================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: api-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+---------------------------------------------
+kubectl get svc api-gateway
+===========================================
+
+==================================================================================================================================
+STEP 3 – Create Ingress for the API Gateway
+This ingress routes ALL external traffic to the API Gateway.
+
+3.1 Basic Ingress (Single Entry Point)
+==========================================================================================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 8080
+``
+kubectl apply -f api-gateway-ingress.yaml
+kubectl port-forward svc/ingress-nginx-controller 8080:80 -n ingress-nginx
+``
+=====================================================================================================================================================
+✅ All traffic now goes to:
+api.example.com → API Gateway → internal services
+======================================================================================================================================================
+
+
+
