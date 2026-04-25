@@ -1,0 +1,343 @@
+👉 Builds ONLY what changed (and dependencies) using
+Step 1: Define Docker target in Nx
+
+Example project.json:
+✅ Option A (most common): project.json inside each app
+
+Example structure:
+user-api/
+  project.json   👈 HERE
+  package.json
+  src/
+
+-------------------------------------------------
+🧠 2. What this config actually does
+
+You are telling Nx:
+
+“Hey, for user-api, when I say docker-build, run this command”
+------------------------------------------------------------------
+{
+  "name": "user-api",
+  "targets": {
+    "docker-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "docker build -t myrepo/user-api:${TAG} user-api"
+      }
+    }
+  }
+}
+👉 Do this for each app
+--------------------------------------------------------------------
+Step 2: CD Pipeline using Nx:
+name: CD - Nx Affected Strategy
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types: [completed]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set tag
+        run: |
+          TAG=${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build only affected images
+        run: |
+          npx nx affected --target=docker-build --base=origin/main
+
+      - name: Push affected images
+        run: |
+          npx nx affected --target=docker-push --base=origin/main
+---------------------------------------------------------------------------------------------------
+🌍 5. Does this work for every stack?
+✅ YES — with a condition
+
+Nx doesn’t care about your stack.
+
+It just runs commands.
+
+✔ Works with:
+Node.js (Express, NestJS)
+React / Vue / Angular
+Python (Flask, Django)
+Java (Spring Boot)
+Go
+.NET
+🚨 The ONLY requirement:
+
+Each app must have:
+
+a Dockerfile
+
+Example:
+
+user-api/Dockerfile
+user-ui/Dockerfile
+🧠 6. Key insight (very important)
+
+Nx is NOT building Docker itself.
+
+👉 It is just orchestrating:
+
+"run this command intelligently"
+🔥 7. Full picture (how everything connects)
+Local:
+npx nx run user-api:docker-build
+CI/CD:
+npx nx affected --target=docker-build
+Result:
+Only changed apps → built
+Others → skipped
+⚠️ 8. Common mistakes (avoid these)
+❌ Missing Dockerfile
+
+→ build fails
+
+❌ Wrong path
+docker build .
+
+👉 builds root instead of app
+
+❌ Forgetting TAG env
+${TAG}
+
+👉 must be set in pipeline
+
+🧩 9. Optional (push step)
+
+You’ll also need:
+
+"docker-push": {
+  "executor": "nx:run-commands",
+  "options": {
+    "command": "docker push myrepo/user-api:${TAG}"
+  }
+}
+🏁 Final answer
+✔ Where do you add it?
+
+Inside each app’s:
+
+project.json (preferred)
+✔ Does it work for every stack?
+
+Yes — as long as:
+
+Dockerfile exists
+command is valid
+🚀 If you want next
+
+I can:
+
+Generate all 4 app configs for you
+Add Docker caching (huge speed boost)
+Or wire this into your existing pipeline cleanly
+
+Just say 👍
+----------------------------------------------------------------------
+You add `"docker-push"` **in the exact same place as `"docker-build"`**—inside each app’s **Nx project configuration**.
+
+Let’s make it crystal clear.
+
+---
+
+# 📍 1. Where exactly?
+
+👉 Inside each app folder:
+
+```plaintext
+user-api/
+  project.json   ✅ (add it here)
+```
+
+---
+
+# 🧩 2. Full example (correct structure)
+
+Your `user-api/project.json` should look like this:
+
+```json
+{
+  "name": "user-api",
+  "targets": {
+    "docker-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "docker build -t myrepo/user-api:${TAG} user-api"
+      }
+    },
+    "docker-push": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "docker push myrepo/user-api:${TAG}"
+      }
+    }
+  }
+}
+```
+
+---
+
+# 🔁 3. Repeat for every app
+
+You’ll do the same for:
+
+* `user-ui/project.json`
+* `admin-ui/project.json`
+* `admin-api/project.json`
+
+👉 Only change the image name:
+
+```json
+"docker build -t myrepo/admin-api:${TAG} admin-api"
+```
+
+---
+
+# 🧠 4. How Nx uses this
+
+Now Nx understands two commands per app:
+
+* `docker-build`
+* `docker-push`
+
+---
+
+## You can run locally:
+
+```bash
+npx nx run user-api:docker-build
+npx nx run user-api:docker-push
+```
+
+---
+
+## In CI/CD:
+
+```bash
+npx nx affected --target=docker-build
+npx nx affected --target=docker-push
+```
+
+👉 Nx will:
+
+* detect changed apps
+* build only those
+* push only those
+
+---
+
+# ⚠️ 5. Important (don’t miss this)
+
+### ❗ `docker-push` does NOT build
+
+So your pipeline must run:
+
+```bash
+npx nx affected --target=docker-build
+npx nx affected --target=docker-push
+```
+
+👉 In that order
+
+---
+
+# 🔐 6. Docker login is still required
+
+Nx does NOT handle authentication.
+
+You still need in your pipeline:
+
+```yaml
+- name: Docker Login
+  uses: docker/login-action@v3
+```
+
+---
+
+# 🚨 7. Common mistake
+
+### ❌ Putting this in root `package.json`
+
+Wrong:
+
+```json
+"scripts": {
+  "docker-push": "..."
+}
+```
+
+👉 Nx won’t track it per app
+
+---
+
+# 🧠 8. Mental model (simple)
+
+Think of Nx like this:
+
+> “Each app has its own mini command system”
+
+So:
+
+| App      | Commands                  |
+| -------- | ------------------------- |
+| user-api | docker-build, docker-push |
+| user-ui  | docker-build, docker-push |
+
+---
+
+# 🏁 Final answer
+
+### ✔ Where do you add it?
+
+Inside each app’s:
+
+```plaintext
+project.json → targets → docker-push
+```
+
+---
+
+### ✔ Why there?
+
+So Nx can:
+
+* track it per app
+* run it selectively (`affected`)
+* scale your pipeline properly
+
+---
+
+# 🚀 If you want next
+
+I can:
+
+* Generate all 4 `project.json` files for you (ready to copy-paste)
+* Or wire this cleanly into your CI/CD so it runs perfectly
+
+Just say 
+
