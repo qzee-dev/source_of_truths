@@ -1,0 +1,126 @@
+### AI PROMPT#########
+List all expected Nx project.json paths under apps/ and libs/ in this monorepo.
+===================================================
+Exactly — if you convert your monorepo to Nx, the expected project.json paths for your apps would be:
+-------------------------------------------------------------------------------
+apps/admin-api/project.json
+apps/admin-ui/project.json
+apps/user-api/project.json
+apps/user-ui/project.json
+
+Each of those files defines the targets (build, lint, test, docker-build, docker-push) that your CI/CD pipeline is calling with nx affected.
+📝 Example Template for apps/admin-api/project.json
+
+Great — let’s scaffold all four project.json files for your apps so you can drop them straight into your Nx monorepo. Each one defines the standard Nx targets (build, lint, test) plus your custom Docker targets (docker-build, docker-push).
+
+===================================================================================================================================================
+
+
+name: Nx Continuous Integration
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+
+jobs:
+  ci:
+    name: Continuous Integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set base and head
+        run: |
+          echo "BASE=origin/main" >> $GITHUB_ENV
+          echo "HEAD=HEAD" >> $GITHUB_ENV
+
+      - name: Lint affected
+        run: npx nx affected --target=lint --base=$BASE --head=$HEAD
+
+      - name: Test affected
+        run: npx nx affected --target=test --base=$BASE --head=$HEAD --coverage
+
+      - name: Build affected
+        run: npx nx affected --target=build --base=$BASE --head=$HEAD
+
+      - name: Sonar Scan
+        uses: SonarSource/sonarcloud-github-action@v2
+        with:
+          args: >
+            -Dsonar.projectKey=monorepo-app
+            -Dsonar.organization=my-org
+            -Dsonar.sources=.
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+      - name: Sonar Quality Gate
+        uses: SonarSource/sonarcloud-quality-gate-action@v1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+==========================================================================================================================
+name: Nx Continuous Deployment
+
+on:
+  workflow_run:
+    workflows: ["Nx Continuous Integration"]   # must match CI workflow name
+    types: [completed]
+
+  workflow_dispatch:   # manual trigger
+
+jobs:
+  cd:
+    name: Continuous Deployment
+    runs-on: ubuntu-latest
+    # Only run automatically if CI finished successfully
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set Docker Tag
+        run: |
+          TAG=${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker images (affected only)
+        run: |
+          npx nx affected \
+            --target=docker-build \
+            --base=origin/main
+
+      - name: Push Docker images (affected only)
+        run: |
+          npx nx affected \
+            --target=docker-push \
+            --base=origin/main
+=================================================================================================================
