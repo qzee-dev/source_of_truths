@@ -149,7 +149,10 @@ npx nx generate @nrwl/web:application admin-ui --directory=apps
 npx nx generate @nrwl/node:application user-api --directory=apps
 npx nx generate @nrwl/web:application user-ui --directory=apps
 ```
-
+npx nx g @nx/node:app admin-api
+npx nx g @nx/web:app admin-ui
+npx nx g @nx/node:app user-api
+npx nx g @nx/web:app user-ui
 ---
 
 ### 4. Generate Library Configs
