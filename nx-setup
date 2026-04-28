@@ -1,0 +1,35 @@
+for a fully manage repo, adding nx to spead up ci
+#initiate nx in the parent repo
+bash:
+npx nx init
+...
+
+ii)understand  your repo stack and add necessary plugins required
+bash:
+npx nx list
+...
+installed your required plugin, if not available check nx  community support
+
+
+iii) confirm yor project if recognised my nx , run this command
+bash:
+npx nx show projects
+npx nx graph
+
+iv)manually add project.json accross all the repos
+.....
+project.json: this file emcompasses your nx plugin and the package name necessary to run your app.
+**`project.json`** is a **configuration file that defines a single Nx project**, including its **build, test, lint tasks, executors, and settings**.
+
+👉 In short: **it tells Nx how a project works and how to run it**.
+###minimum configuration##
+{
+  "name": "my-project",
+  "projectType": "library",
+  "targets": {}
+}
+
+v)if you encounter any error use this command to refresh and try again
+bash:
+npx nx reset
+......
