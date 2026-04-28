@@ -1,0 +1,25 @@
+✅ One-sentence final answer (bookmark this)
+
+pnpm installs shared dependencies once and reuses them safely via links, while npm duplicates them and often hides dependency mistakes through hoisting.
+
+
+✅ Why this matters for your Nx monorepo
+With pnpm + Nx:
+
+React apps stay clean
+Express apps stay clean
+Shared deps are shared correctly
+No accidental cross‑app imports
+Faster installs
+Smaller CI caches
+Fewer production bugs
+
+
+If you want next, I can:
+
+Show a real directory tree of npm vs pnpm
+Explain why hoisting breaks monorepos
+Show how pnpm + Nx prevents backend code from leaking into frontend
+Help design the ideal dependency layout for your 4 apps
+
+Just say the word 👍
