@@ -47,3 +47,26 @@ Sequential and Parrallel Runner Differences
 
 Would you like me to sketch a hybrid workflow where lint/test run in parallel (fast feedback), but build runs sequentially (to save runner concurrency)? That way you balance speed and cost.
 
+=====================================================================================================================================
+Different Between Base and Head
+================================================================================
+🧩 What --base and --head are
+
+    --base: The commit SHA that Nx should treat as the “starting point” (the old state of your code).
+    --head: The commit SHA that Nx should treat as the “ending point” (the new state of your code).
+Nx compares these two commits to figure out what changed. From that diff, it determines which projects are “affected.”
+🔧 Why $NX_BASE and $NX_HEAD
+    In CI, you don’t want to hardcode commit SHAs.
+The action nrwl/nx-set-shas automatically sets environment variables:
+$NX_BASE → the commit you’re comparing against (usually the branch you’re merging into, like origin/main).
+  $NX_HEAD → the commit you just pushed (the tip of your PR or branch).
+
+    By passing --base=$NX_BASE --head=$NX_HEAD, you’re telling Nx:
+    “Look at the changes between these two commits and only run tasks for affected projects.”
+
+🌟 Elementary analogy
+Imagine you’re comparing two versions of a school notebook:
+  Base = yesterday’s version of the notebook.
+   Head = today’s version after you added new notes.
+    Nx flips through the pages to see what changed between yesterday and today, then only re‑checks the homework assignments (projects) that were touched.
+
