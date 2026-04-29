@@ -1,22 +1,22 @@
-for a fully manage repo, adding nx to spead up ci
+a)for a fully manage repo, adding nx to spead up ci
 #initiate nx in the parent repo
 bash:
 npx nx init
 ...
 
-ii)understand  your repo stack and add necessary plugins required
+b)understand  your repo stack and add necessary plugins required
 bash:
 npx nx list
 ...
 installed your required plugin, if not available check nx  community support
 
 
-iii) confirm yor project if recognised my nx , run this command
+c) confirm yor project if recognised my nx , run this command
 bash:
 npx nx show projects
 npx nx graph
 
-iv)manually add project.json accross all the repos
+d)manually add project.json accross all the repos
 .....
 project.json: this file emcompasses your nx plugin and the package name necessary to run your app.
 **`project.json`** is a **configuration file that defines a single Nx project**, including its **build, test, lint tasks, executors, and settings**.
@@ -29,9 +29,21 @@ project.json: this file emcompasses your nx plugin and the package name necessar
   "targets": {}
 }
 
-v)if you encounter any error use this command to refresh and try again
+e)if you encounter any error use this command to refresh and try again
 bash:
 npx nx reset
 ......
 
+=======================================================================================
+Sequential and Parrallel Runner Differences
+==============================================================================================
+🌟 Elementary summary
+
+    Sequential: Slower, but uses one runner → cheaper in terms of concurrency.
+
+    Parallel: Faster, but multiple runners run at once → same total minutes, but can feel more expensive if you’re billed per concurrent runner.
+
+👉 If you’re on GitHub’s free tier, you get a set number of minutes per month. Parallel jobs don’t increase the total minutes used, but they do increase concurrent usage. If you’re on a paid plan where concurrency is billed separately, then yes, parallelism can attract more fees.
+
+Would you like me to sketch a hybrid workflow where lint/test run in parallel (fast feedback), but build runs sequentially (to save runner concurrency)? That way you balance speed and cost.
 
