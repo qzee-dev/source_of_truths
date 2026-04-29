@@ -69,4 +69,20 @@ Imagine you’re comparing two versions of a school notebook:
   Base = yesterday’s version of the notebook.
    Head = today’s version after you added new notes.
     Nx flips through the pages to see what changed between yesterday and today, then only re‑checks the homework assignments (projects) that were touched.
+=========================================================================================================================================================
+
+
+Here’s the visual diagram you asked for — it shows how Nx walks the dependency graph between the **base commit** and the **head commit** to figure out which projects are affected.  
+
+On the left, you see the **Base Commit (Original State)** — all projects and shared libraries before your changes. On the right, the **Head Commit (New Changes)** — after you’ve modified files. Nx compares these two graphs:
+
+- 🔴 **Changed nodes** → projects or libraries you directly edited.  
+- 🟠 **Affected nodes** → projects that depend on those changed ones.  
+- ⚪ **Unaffected nodes** → projects untouched by the change.
+
+So if you modify a shared library, Nx traces every app that depends on it and marks them as “affected.” That’s why multiple apps can show up even if you only changed one file.
+
+This dependency‑graph walk is what makes Nx’s CI intelligent — it doesn’t just look at file paths, it understands relationships between projects.  
+
+Would you like me to show you how to run `pnpm nx graph --affected` locally so you can see this same visualization for your own workspace?
 
