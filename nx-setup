@@ -68,6 +68,7 @@ nx g @nx/js:lib shared-utils
 nx g @nx/js:lib shared-types
 
 4️⃣ Create the Shared UI Component Library (React Only)
+nx g @nx/react:lib ui
 
 ============================================================================================================================================================================
 
