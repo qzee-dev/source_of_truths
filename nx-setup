@@ -1,3 +1,12 @@
+
+if you have a project already just create 
+MKdir apps
+mv user-ui apps/
+mv user-api apps/
+mv admin-ui apps/
+mv admin-api apps/
+
+
 a)for a fully manage repo, adding nx to spead up ci
 #initiate nx in the parent repo
 bash:
@@ -33,6 +42,29 @@ e)if you encounter any error use this command to refresh and try again
 bash:
 npx nx reset
 ......
+
+f)create shared lib: for stability and security, your application use the dependencies only no pulling depencies from outside,
+Create Shared and UI Libraries (Correct Way)
+Shared utility library
+i)nx g @nx/react:lib shared
+ii)nx g @nx/react:lib ui
+iii)
+Now you have:
+libs/
+ ├─ shared/
+ │   └─ src/
+ │      ├─ lib/
+ │      │   └─ shared.ts
+ │      └─ index.ts
+ └─ ui/
+     └─ src/
+        ├─ lib/
+        │   └─ button.tsx
+        └─ index.ts
+
+Nx automatically links everything.
+
+============================================================================================================================================================================
 
 =======================================================================================
 Sequential and Parrallel Runner Differences
