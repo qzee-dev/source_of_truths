@@ -46,23 +46,28 @@ npx nx reset
 f)create shared lib: for stability and security, your application use the dependencies only no pulling depencies from outside,
 Create Shared and UI Libraries (Correct Way)
 Shared utility library
-i)nx g @nx/react:lib shared
-ii)nx g @nx/react:lib ui
-iii)
-Now you have:
-libs/
- ├─ shared/
- │   └─ src/
- │      ├─ lib/
- │      │   └─ shared.ts
- │      └─ index.ts
- └─ ui/
-     └─ src/
-        ├─ lib/
-        │   └─ button.tsx
-        └─ index.ts
+i)nx g @nx/react:libs shared
+ii)nx g @nx/react:libs ui
+iii)🏗️ Final Architecture (What We’re Building)
+apps/
+ ├── admin-ui      (React)
+ ├── user-ui       (React)
+ ├── admin-api     (Node/Nest/Express)
+ └── user-api      (Node/Nest/Express)
 
-Nx automatically links everything.
+libs/
+ ├── shared/
+ │   ├── utils     ✅ used by ALL apps
+ │   └── types     ✅ used by ALL apps
+ └── ui/           ✅ React-only components
+     ├── buttons
+     └── layouts
+
+3️⃣Create the Shared Utility Library (ALL Apps)
+nx g @nx/js:lib shared-utils
+nx g @nx/js:lib shared-types
+
+4️⃣ Create the Shared UI Component Library (React Only)
 
 ============================================================================================================================================================================
 
