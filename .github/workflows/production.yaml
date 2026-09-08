@@ -1,0 +1,218 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+
+    inputs:
+
+      service:
+        description: Service To Release
+        required: true
+        type: choice
+        options:
+          - api-gateway
+          - user-service
+          - payment-service
+          - wallet-service
+          - transaction-service
+          - notification-service
+          - fraud-service
+
+      version:
+        description: Approved Version
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+
+  promote:
+
+    name: Promote And Deploy Production
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    steps:
+
+      #################################################
+      # Checkout
+      #################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      #################################################
+      # Download Release Metadata
+      #################################################
+
+      - name: Download Release Metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-data
+          path: release
+
+      #################################################
+      # AWS Credentials
+      #################################################
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      #################################################
+      # Read Release Metadata
+      #################################################
+
+      - name: Read Release Metadata
+        run: |
+
+          SERVICE=$(cat release/service.txt)
+          RELEASE_VERSION=$(cat release/version.txt)
+          IMAGE_TAG=$(cat release/image-tag.txt)
+          DIGEST=$(cat release/digest.txt)
+
+          echo "SERVICE=$SERVICE" >> $GITHUB_ENV
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "DIGEST=$DIGEST" >> $GITHUB_ENV
+
+      #################################################
+      # Validate Release
+      #################################################
+
+      - name: Validate Release
+        run: |
+
+          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
+            echo "Service mismatch"
+            exit 1
+          fi
+
+          if [[ "$RELEASE_VERSION" != "${{ inputs.version }}" ]]; then
+            echo "Version mismatch"
+            exit 1
+          fi
+
+      #################################################
+      # Retag Same Immutable Digest
+      #################################################
+
+      - name: Create Production Release Tag
+        run: |
+
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name "$SERVICE" \
+            --image-ids imageDigest="$DIGEST" \
+            --query 'images[].imageManifest' \
+            --output text)
+
+          if [[ -z "$MANIFEST" || "$MANIFEST" == "None" ]]; then
+            echo "Image digest not found in ECR"
+            exit 1
+          fi
+
+          aws ecr put-image \
+            --repository-name "$SERVICE" \
+            --image-tag "$RELEASE_VERSION" \
+            --image-manifest "$MANIFEST"
+
+      #################################################
+      # Release History
+      #################################################
+
+      - name: Store Release History
+        run: |
+
+          mkdir -p release-history
+
+          cat <<EOF > release-history/${SERVICE}-${RELEASE_VERSION}.json
+          {
+            "service":"${SERVICE}",
+            "version":"${RELEASE_VERSION}",
+            "image_tag":"${IMAGE_TAG}",
+            "digest":"${DIGEST}",
+            "commit":"${GITHUB_SHA}",
+            "environment":"production",
+            "date":"$(date -u +%FT%TZ)"
+          }
+          EOF
+
+      #################################################
+      # Configure Kubectl
+      #################################################
+
+      - name: Configure Kubectl
+        run: |
+
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name fintech-production
+
+      #################################################
+      # Deploy Exact Same Digest
+      #################################################
+
+      - name: Deploy To Production
+        run: |
+
+          helm upgrade fintech ./helm \
+            --install \
+            --namespace production \
+            --set image.repository=$SERVICE \
+            --set image.digest=$DIGEST
+
+      #################################################
+      # Verify Production Rollout
+      #################################################
+
+      - name: Verify Rollout
+        run: |
+
+          kubectl rollout status \
+            deployment/$SERVICE \
+            -n production
+
+      #################################################
+      # Commit Release History
+      #################################################
+
+      - name: Commit Release Metadata
+        run: |
+
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+
+          git add release-history
+
+          git commit \
+            -m "release $SERVICE $RELEASE_VERSION" \
+            || true
+
+          git push
+
+      #################################################
+      # Production Summary
+      #################################################
+
+      - name: Production Deployment Summary
+        run: |
+
+          echo "======================================"
+          echo "PRODUCTION DEPLOYMENT SUCCESSFUL"
+          echo "======================================"
+          echo "Service : $SERVICE"
+          echo "Version : $RELEASE_VERSION"
+          echo "Tag     : $IMAGE_TAG"
+          echo "Digest  : $DIGEST"
+          echo "======================================"
