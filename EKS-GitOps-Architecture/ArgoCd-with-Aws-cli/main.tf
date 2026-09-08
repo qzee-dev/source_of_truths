@@ -42,4 +42,34 @@ And:
 kubectl get pods \
   -n kube-system \
   -l app.kubernetes.io/instance=eks-pod-identity-agent
+###################################################################################
+#5. Install AWS Load Balancer Controller
+#For production, I would expose Argo CD through an HTTPS AWS ALB, rather than exposing argocd-server directly with a public LoadBalancer.
+#I'm assuming your AWS Load Balancer Controller is already installed.
+#Check:
+###################################################################################
+kubectl get deployment \
+  -n kube-system \
+  aws-load-balancer-controller
+
+If it isn't installed, install it before the Argo ingress step.
+
+
+#####################################################################################
+#6. Install Argo CD using Helm
+Add the Helm repository:
+#####################################################################################
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
+
+Find available versions:
+
+helm search repo argo/argo-cd --versions | head -20
+
+Choose a specific chart version rather than blindly using whatever happens to be latest:
+export ARGOCD_CHART_VERSION="<PIN-A-VERSION>"
+Create namespace:
+
+kubectl create namespace argocd
+
 
