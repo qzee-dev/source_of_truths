@@ -1,6 +1,3 @@
-Yes. I would make the README the **final architecture/runbook**, including the last thing we added: **automatic production release history + digest-based rollback**.
-
- Here is the GitHub-ready `README.md`:
 
  # Release, Promotion and Rollback Strategy
 
