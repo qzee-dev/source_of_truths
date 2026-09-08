@@ -1,155 +1,179 @@
-Absolutely. Since you want this as a **GitHub-ready, editable `README.md`**, here is the complete Markdown content. I kept your flow and wording intact, while formatting it so it renders cleanly on GitHub.
+Yes. I would make the README the **final architecture/runbook**, including the last thing we added: **automatic production release history + digest-based rollback**.
 
- README.md — Release Promotion Flow
+ Here is the GitHub-ready `README.md`:
 
-# Release Promotion Flow
+ # Release, Promotion and Rollback Strategy
 
- This repository uses a **build-once, promote-by-digest** release strategy.
+ This repository uses a **build-once, promote-by-digest** deployment strategy.
 
- The release process is divided into three independent GitHub Actions workflows:
+ The release process is divided into four independent GitHub Actions workflows:
 
 ```
 release.yaml
     └── Build → Push → Capture Digest → Store Release Metadata
 
 staging.yaml
-    └── Get Release → Deploy Digest → Rollout → Smoke → Integration → DAST
+    └── Get Release → Validate → Deploy Digest → Rollout → Smoke → Integration → DAST
 
 production.yaml
-    └── Get Release → Approval → Retag Digest → Release History → Deploy Digest → Rollout
+    └── Get Release → Validate → Approval → Retag Digest → Deploy Digest → Rollout → Release History
+
+rollback.yaml
+    └── Select Known-Good Release → Verify Digest → Approval → Deploy Digest → Verify → Record Rollback
+```
+
+ The fundamental rule is:
+
+ > **Build once. Test the exact artifact. Approve it. Promote the exact same immutable digest. Roll back to a previously known-good immutable digest.**
+
+---
+
+ # Architecture
+
+```
+                         release.yaml
+                              │
+                              ▼
+                       SELECT SERVICE
+                              │
+                              ▼
+                       SELECT VERSION
+                              │
+                              ▼
+                        CHECKOUT CODE
+                              │
+                              ▼
+                         BUILD IMAGE
+                              │
+                              ▼
+                          PUSH ECR
+                              │
+                              ▼
+                     CAPTURE ECR DIGEST
+                              │
+                              ▼
+                  STORE RELEASE METADATA
+                              │
+                              ▼
+                       RELEASE ARTIFACT
+                              │
+                              ▼
+                        staging.yaml
+                              │
+                              ▼
+                    VALIDATE RELEASE
+                              │
+                              ▼
+                     VERIFY ECR DIGEST
+                              │
+                              ▼
+                    DEPLOY SAME DIGEST
+                              │
+                              ▼
+                    VERIFY ROLLOUT
+                              │
+                              ▼
+                       SMOKE TESTS
+                              │
+                              ▼
+                    INTEGRATION TESTS
+                              │
+                              ▼
+                            DAST
+                              │
+                              ▼
+                       STAGING PASS
+                              │
+                              ▼
+                      production.yaml
+                              │
+                              ▼
+                    VALIDATE SAME RELEASE
+                              │
+                              ▼
+                      VERIFY DIGEST
+                              │
+                              ▼
+                    PRODUCTION APPROVAL
+                              │
+                              ▼
+                     RETAG SAME DIGEST
+                              │
+                              ▼
+                    DEPLOY SAME DIGEST
+                              │
+                              ▼
+                    VERIFY ROLLOUT
+                              │
+                              ▼
+                  STORE RELEASE HISTORY
+                              │
+                              ▼
+                         PRODUCTION
+                              │
+                     ┌────────┴────────┐
+                     │                 │
+                  HEALTHY           FAILURE
+                     │                 │
+                     │                 ▼
+                     │          rollback.yaml
+                     │                 │
+                     │                 ▼
+                     │        SELECT KNOWN-GOOD
+                     │             RELEASE
+                     │                 │
+                     │                 ▼
+                     │          VERIFY DIGEST
+                     │                 │
+                     │                 ▼
+                     │        PRODUCTION APPROVAL
+                     │                 │
+                     │                 ▼
+                     │        DEPLOY SAME DIGEST
+                     │                 │
+                     └────────────◄────┘
 ```
 
 ---
 
- ## Release Flow
+ # Workflow Separation
+
+ The workflows remain intentionally separated.
 
 ```
-release.yaml
-    │
-    ├── service
-    ├── version
-    ├── commit
-    ├── build tag
-    ├── immutable digest
-    └── release ID
-          │
-          ▼
-staging.yaml
-    │
-    ├── validate release
-    ├── verify ECR digest
-    ├── deploy digest
-    ├── rollout
-    ├── smoke
-    ├── integration
-    └── DAST
-          │
-          ▼
-     STAGING PASS
-          │
-          ▼
-production.yaml
-    │
-    ├── validate same release
-    ├── verify same digest
-    ├── GitHub production approval
-    ├── create v1.3.5 ECR tag
-    ├── deploy same digest
-    ├── verify rollout
-    ├── verify deployed digest
-    └── record release history
+.github/workflows/
+
+├── release.yaml
+├── staging.yaml
+├── production.yaml
+└── rollback.yaml
 ```
+
+ Each workflow has a specific responsibility.
 
 ---
 
- ## Release Artifact Identity
+ # 1\. `release.yaml`
 
- The release is identified using multiple pieces of metadata.
-
- The **immutable ECR digest is the source of truth**.
-
-```
-Service:
-payment-service
-
-Human Version:
-v1.3.5
-
-Commit:
-a7d39bc...
-
-Build Tag:
-v1.3.5-a7d39bc
-
-Immutable Digest:
-sha256:6c41f3f5....
-
-Release ID:
-payment-service-v1.3.5-a7d39bc
-```
-
- The relationship is:
-
-```
-payment-service
-        │
-        ▼
-v1.3.5
-        │
-        ▼
-v1.3.5-a7d39bc
-        │
-        ▼
-sha256:6c41f3f5....
-```
-
- The digest represents the exact container image that was built and tested.
-
----
-
- # `release.yaml`
-
- The release workflow is responsible for building and publishing the selected service.
+ `release.yaml` is responsible for creating a release artifact.
 
 ```
 release.yaml
     │
     ├── Select service
-    │
-    ├── Select release version
-    │
+    ├── Select version
     ├── Checkout source
-    │
     ├── Validate version
-    │
-    ├── Validate service
-    │
     ├── Capture commit
-    │
     ├── Generate build tag
-    │
     ├── Build Docker image
-    │
     ├── Push image to ECR
-    │
-    ├── Capture immutable ECR digest
-    │
+    ├── Capture immutable digest
     ├── Verify digest
-    │
     └── Store release metadata
 ```
 
- The resulting release metadata contains:
-
-```
-service
-version
-commit
-image_tag
-digest
-release_id
-release_run_id
-```
+ The engineer manually selects the service and version.
 
  Example:
 
@@ -159,14 +183,44 @@ payment-service
 
 Version:
 v1.3.5
+```
 
+ The workflow generates:
+
+```
 Commit:
-a7d39bc123456789...
+a7d39bc
 
 Build Tag:
 v1.3.5-a7d39bc
 
-Digest:
+Release ID:
+payment-service-v1.3.5-a7d39bc
+
+Immutable Digest:
+sha256:6c41f3f5....
+```
+
+---
+
+ # Release Identity
+
+ Every release must maintain the following identity:
+
+```
+Service:
+payment-service
+
+Human Version:
+v1.3.5
+
+Commit:
+a7d39bc
+
+Build Tag:
+v1.3.5-a7d39bc
+
+Immutable Digest:
 sha256:6c41f3f5....
 
 Release ID:
@@ -176,194 +230,117 @@ Release Run ID:
 123456789
 ```
 
+ The relationship is:
+
+```
+payment-service
+       │
+       ▼
+v1.3.5
+       │
+       ▼
+v1.3.5-a7d39bc
+       │
+       ▼
+sha256:6c41f3f5....
+```
+
+ The **digest is the source of truth**.
+
+ The semantic version and build tag are human-readable identifiers.
+
 ---
 
- # `staging.yaml`
+ # Release Artifact
 
- The staging workflow retrieves the exact release created by `release.yaml`.
+ `release.yaml` stores the release metadata as an artifact.
+
+ Recommended metadata:
+
+```
+release-data/
+├── service.txt
+├── version.txt
+├── commit.txt
+├── image-tag.txt
+├── digest.txt
+├── release-id.txt
+└── release-run-id.txt
+```
+
+ Example:
+
+```
+service.txt
+payment-service
+
+version.txt
+v1.3.5
+
+commit.txt
+a7d39bc123456789...
+
+image-tag.txt
+v1.3.5-a7d39bc
+
+digest.txt
+sha256:6c41f3f5....
+
+release-id.txt
+payment-service-v1.3.5-a7d39bc
+
+release-run-id.txt
+123456789
+```
+
+---
+
+ # 2\. `staging.yaml`
+
+ `staging.yaml` consumes the exact release produced by `release.yaml`.
 
 ```
 staging.yaml
     │
-    ├── Get Release
-    │
+    ├── Get release
     ├── Validate release identity
-    │
-    ├── Verify source commit
-    │
     ├── Verify ECR digest
-    │
-    ├── Verify build tag
-    │
-    ├── Deploy exact digest
-    │
+    ├── Deploy digest
     ├── Verify rollout
-    │
     ├── Verify deployed digest
-    │
     ├── Smoke tests
-    │
     ├── Integration tests
-    │
     └── DAST
 ```
 
- The staging workflow does **not rebuild the Docker image**.
+ The staging workflow must not rebuild the Docker image.
 
- It deploys the exact digest produced by `release.yaml`.
-
-```
-payment-service@sha256:6c41f3f5....
-```
-
----
-
- # Staging Validation
-
- Before deployment, staging validates:
-
-```
-release_id
-    +
-release_run_id
-    +
-service
-    +
-version
-    +
-commit
-    +
-build tag
-    +
-digest
-```
-
- The ECR digest is then verified.
-
-```
-Expected:
-
-sha256:6c41f3f5....
-
-        │
-        ▼
-
-ECR
-
-        │
-        ▼
-
-sha256:6c41f3f5....
-
-        │
-        ▼
-
-MATCH
-```
-
- Only after the digest is verified does the workflow deploy to Kubernetes.
-
----
-
- # Staging Tests
-
- After deployment:
-
-```
-Deploy
-  │
-  ▼
-Rollout Verification
-  │
-  ▼
-Smoke Tests
-  │
-  ▼
-Integration Tests
-  │
-  ▼
-DAST
-  │
-  ▼
-STAGING PASS
-```
-
- All required checks must pass before the release is considered ready for production.
-
----
-
- # `production.yaml`
-
- The production workflow promotes the same release that passed staging.
-
-```
-production.yaml
-    │
-    ├── Get Release
-    │
-    ├── Validate same release
-    │
-    ├── Verify same digest
-    │
-    ├── Verify build tag
-    │
-    ├── GitHub production approval
-    │
-    ├── Create human-readable production tag
-    │
-    ├── Verify production tag
-    │
-    ├── Deploy same digest
-    │
-    ├── Verify rollout
-    │
-    ├── Verify deployed digest
-    │
-    └── Record release history
-```
-
- Production does **not rebuild the Docker image**.
-
- Production deploys:
+ It deploys:
 
 ```
 payment-service@sha256:6c41f3f5....
 ```
-
- The same digest that was tested in staging.
 
 ---
 
  # Cross-Workflow Release Handoff
 
- The release workflow produces a specific workflow run ID.
-
- Example:
+ The release workflow produces:
 
 ```
-release_run_id:
-123456789
+release_run_id
+release_id
+service
+version
+commit
+image_tag
+digest
 ```
 
- The release also produces:
-
-```
-release_id:
-payment-service-v1.3.5-a7d39bc
-```
-
- And:
-
-```
-digest:
-sha256:6c41f3f5....
-```
-
- The complete handoff is:
+ The handoff is:
 
 ```
 release.yaml
-     │
      │
      ├── release_id
      │     payment-service-v1.3.5-a7d39bc
@@ -377,16 +354,14 @@ release.yaml
                     ▼
              staging.yaml
                     │
-                    ├── release_run_id = 123456789
-                    ├── release_id
-                    └── service
+                    ├── same release_run_id
+                    ├── same release_id
+                    ├── same service
+                    ├── same version
+                    └── same digest
                     │
                     ▼
-             Download artifact
-             FROM RUN 123456789
-                    │
-                    ▼
-             Validate release
+             Download release artifact
                     │
                     ▼
              Verify ECR digest
@@ -395,10 +370,10 @@ release.yaml
              Deploy digest
                     │
                     ▼
-              Smoke / Integration / DAST
+             Smoke / Integration / DAST
                     │
                     ▼
-                 STAGING
+                 STAGING PASS
                     │
                     ▼
              production.yaml
@@ -409,7 +384,7 @@ release.yaml
                     └── same digest
                            │
                            ▼
-                    Production approval
+                    Production Approval
                            │
                            ▼
                     Deploy same digest
@@ -417,118 +392,80 @@ release.yaml
 
 ---
 
- # Build Once, Promote Same Digest
+ # 3\. `production.yaml`
 
- The fundamental rule of the release process is:
-
-```
-                BUILD
-                  │
-                  ▼
-             Docker Image
-                  │
-                  ▼
-                 ECR
-                  │
-                  ▼
-          Immutable Digest
-                  │
-          ┌───────┴───────┐
-          │               │
-          ▼               ▼
-       STAGING        PRODUCTION
-          │               │
-          ▼               │
-        TESTS             │
-          │               │
-          ▼               │
-       APPROVAL ──────────┘
-                  │
-                  ▼
-            SAME DIGEST
-```
-
- There is:
+ Production promotes the exact artifact that passed staging.
 
 ```
-NO REBUILD
+production.yaml
+    │
+    ├── Get release
+    ├── Validate same release
+    ├── Verify same digest
+    ├── GitHub production approval
+    ├── Create human-readable ECR tag
+    ├── Verify production tag
+    ├── Deploy same digest
+    ├── Verify rollout
+    ├── Verify deployed digest
+    └── Store release history
 ```
 
- between staging and production.
+ Production does not rebuild the image.
 
- There is:
-
-```
-NO SECOND DOCKER BUILD
-```
-
- during production deployment.
-
- There is:
+ Production deploys:
 
 ```
-NO DIFFERENT IMAGE
+payment-service@sha256:6c41f3f5....
 ```
 
- between environments.
+ The same digest that passed staging.
 
 ---
 
- # Digest Is the Source of Truth
+ # Production Approval
 
- The human version:
-
-```
-v1.3.5
-```
-
- is used for human-readable release identification.
-
- The build tag:
+ Production must use a GitHub Environment:
 
 ```
-v1.3.5-a7d39bc
+production
 ```
 
- identifies the build.
+ with required reviewers configured.
 
- The immutable digest:
-
-```
-sha256:6c41f3f5....
-```
-
- identifies the actual container image.
-
- Therefore:
+ The deployment flow becomes:
 
 ```
-Human Version
+STAGING PASS
      │
      ▼
-Build Tag
+production.yaml
      │
      ▼
-Immutable Digest
+GitHub Production Environment
      │
-     ├───────────────┐
-     ▼               ▼
-  STAGING        PRODUCTION
+     ▼
+Required Reviewer Approval
+     │
+     ▼
+Production Deployment
 ```
 
- The digest is the authoritative identity.
+ The approval is a deployment gate.
 
 ---
 
- # ECR Example
+ # ECR Tagging
 
- After `release.yaml`:
+ After staging passes and production is approved, the same digest can receive the human-readable production tag.
+
+ Before promotion:
 
 ```
 payment-service:v1.3.5-a7d39bc
-             │
-             ▼
-sha256:6c41f3f5....
+              │
+              ▼
+       sha256:6c41f3f5....
 ```
 
  After production promotion:
@@ -536,25 +473,44 @@ sha256:6c41f3f5....
 ```
 payment-service:v1.3.5-a7d39bc
 payment-service:v1.3.5
-             │
-             ▼
-sha256:6c41f3f5....
+              │
+              ▼
+       sha256:6c41f3f5....
 ```
 
- Both tags point to the **same immutable digest**.
+ Both tags point to the same immutable digest.
 
- No image rebuild occurs.
+ No rebuild occurs.
 
 ---
 
- # Release History
+ # 4\. Automatic Production Release History
 
- Production records the release in:
+ Release history is created automatically by `production.yaml`.
+
+ It does **not** need to be manually created for every release.
+
+ The repository uses:
 
 ```
 release-history/
-└── payment-service-v1.3.5.json
+└── <service>/
+    ├── v1.3.3.json
+    ├── v1.3.4.json
+    ├── v1.3.5.json
+    └── ...
 ```
+
+ Example:
+
+```
+release-history/
+└── payment-service/
+    ├── v1.3.4.json
+    └── v1.3.5.json
+```
+
+ The workflow creates these files after a successful production deployment.
 
  Example:
 
@@ -567,171 +523,590 @@ release-history/
   "image_tag": "v1.3.5-a7d39bc",
   "digest": "sha256:6c41f3f5....",
   "commit": "a7d39bc123456789...",
-  "environment": "production"
+  "environment": "production",
+  "approved_by": "github-user",
+  "production_workflow_run_id": "987654321",
+  "deployed_at": "2026-09-08T00:00:00Z"
 }
 ```
 
- This provides an auditable relationship between:
+ The release history therefore records the complete production identity.
+
+---
+
+ # Release History Purpose
+
+ Release history provides the relationship between:
 
 ```
 Service
    │
    ├── Version
+   ├── Release ID
+   ├── Release Run ID
    ├── Commit
-   ├── Build
+   ├── Build Tag
    ├── ECR Digest
-   ├── Staging
-   └── Production
+   ├── Production Workflow
+   └── Production Deployment
+```
+
+ This information is used by `rollback.yaml`.
+
+---
+
+ # 5\. `rollback.yaml`
+
+ Rollback is a separate workflow.
+
+```
+rollback.yaml
+    │
+    ├── Select service
+    ├── Select rollback type
+    ├── Find known-good release
+    ├── Read release history
+    ├── Verify ECR digest
+    ├── Verify build tag
+    ├── Prevent no-op rollback
+    ├── GitHub production approval
+    ├── Deploy immutable digest
+    ├── Verify rollout
+    ├── Verify deployed digest
+    └── Record rollback
+```
+
+ Rollback does not rebuild the application.
+
+ Rollback does not create a new Docker image.
+
+ Rollback restores a previously known-good immutable digest.
+
+---
+
+ # Rollback Options
+
+ Rollback supports two modes.
+
+ ## Previous Production Release
+
+ The engineer selects:
+
+```
+Service:
+payment-service
+
+Rollback Type:
+previous
+```
+
+ The workflow determines the current production digest.
+
+ Example:
+
+```
+Current:
+
+v1.3.5
+sha256:CCC
+```
+
+ Release history contains:
+
+```
+v1.3.4 → sha256:BBB
+v1.3.5 → sha256:CCC
+```
+
+ The workflow selects:
+
+```
+v1.3.4
+sha256:BBB
 ```
 
 ---
 
- # Complete Release Lifecycle
+ ## Specific Known-Good Version
+
+ The engineer can explicitly select:
 
 ```
-                         ┌─────────────────┐
-                         │   release.yaml  │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                           Select Service
-                                  │
-                                  ▼
-                           Select Version
-                                  │
-                                  ▼
-                            Checkout Code
-                                  │
-                                  ▼
-                             Build Image
-                                  │
-                                  ▼
-                             Push ECR
-                                  │
-                                  ▼
-                         Capture ECR Digest
-                                  │
-                                  ▼
-                       Store Release Metadata
-                                  │
-                                  ▼
-                         Release Run Created
-                                  │
-                                  ▼
-                         ┌─────────────────┐
-                         │  staging.yaml   │
-                         └────────┬────────┘
-                                  │
-                                  ▼
-                       Download Exact Release
-                                  │
-                                  ▼
-                        Validate Release ID
-                                  │
-                                  ▼
-                      Validate Release Run ID
-                                  │
-                                  ▼
-                        Verify ECR Digest
-                                  │
-                                  ▼
-                         Deploy Exact Digest
-                                  │
-                                  ▼
-                         Verify Rollout
-                                  │
-                                  ▼
-                           Smoke Tests
-                                  │
-                                  ▼
-                        Integration Tests
-                                  │
-                                  ▼
-                              DAST
-                                  │
-                                  ▼
-                         ┌───────────────┐
-                         │ STAGING PASS  │
-                         └───────┬───────┘
-                                 │
-                                 ▼
-                       ┌──────────────────┐
-                       │ production.yaml  │
-                       └────────┬─────────┘
-                                │
-                                ▼
-                      Get Exact Release
-                                │
-                                ▼
-                    Validate Same Release
-                                │
-                                ▼
-                    Verify Same Digest
-                                │
-                                ▼
-                    GitHub Approval
-                                │
-                                ▼
-                    Retag Same Digest
-                                │
-                                ▼
-                    Deploy Same Digest
-                                │
-                                ▼
-                    Verify Rollout
-                                │
-                                ▼
-                  Verify Deployed Digest
-                                │
-                                ▼
-                   Record Release History
-                                │
-                                ▼
-                         PRODUCTION
+Service:
+payment-service
+
+Rollback Type:
+specific
+
+Target Version:
+v1.3.4
+```
+
+ The workflow reads:
+
+```
+release-history/payment-service/v1.3.4.json
+```
+
+ It obtains:
+
+```
+Version:
+v1.3.4
+
+Digest:
+sha256:BBB
+```
+
+ It verifies the digest still exists in ECR before deploying it.
+
+---
+
+ # Rollback Flow
+
+```
+Current Production
+       │
+       ▼
+v1.3.5
+sha256:CCC
+       │
+       │ INCIDENT
+       ▼
+rollback.yaml
+       │
+       ▼
+Find Known-Good Release
+       │
+       ▼
+v1.3.4
+sha256:BBB
+       │
+       ▼
+Verify ECR Digest
+       │
+       ▼
+Production Approval
+       │
+       ▼
+Deploy
+       │
+       ▼
+Verify Rollout
+       │
+       ▼
+Verify Deployed Digest
+       │
+       ▼
+Production
+v1.3.4
+sha256:BBB
 ```
 
 ---
 
- # Core Release Guarantees
+ # Rollback Is Not a Rebuild
 
- This release architecture guarantees:
-
- - **Build once**
-- **Deploy many**
-- **Immutable ECR digest**
-- **No rebuild after staging**
-- **Same artifact from staging to production**
-- **Manual release selection**
-- **Manual production approval**
-- **Service-level releases**
-- **Release traceability**
-- **Commit traceability**
-- **ECR digest traceability**
-- **Staging test gates**
-- **Production deployment verification**
-- **Release history**
-- **Cross-workflow release identity**
-
- The final principle is:
+ The rollback process must never do this:
 
 ```
-                ONE BUILD
-                   │
-                   ▼
-              ONE DIGEST
-                   │
-          ┌────────┴────────┐
-          ▼                 ▼
-       STAGING          PRODUCTION
-          │                 │
-          ▼                 ▼
-        TEST                RUN
-          │                 │
-          └───────┬─────────┘
-                  ▼
-            SAME DIGEST
+Old Commit
+    │
+    ▼
+Docker Build
+    │
+    ▼
+New Image
+    │
+    ▼
+Production
 ```
 
- **Build once. Test the exact artifact. Approve it. Promote the exact same digest.**
+ Instead:
 
- You can paste that directly into the repository as `README.md`.
+```
+Known-Good Release
+       │
+       ▼
+Existing ECR Digest
+       │
+       ▼
+Production
+```
+
+ This guarantees that rollback uses the exact image that was previously built and deployed.
+
+---
+
+ # Rollback Verification
+
+ Before rollback:
+
+```
+Current Production Digest
+        │
+        ▼
+Target Release Digest
+```
+
+ The target digest must:
+
+ - Exist in ECR.
+- Match the release history.
+- Match the build tag.
+- Belong to the requested service.
+- Represent a valid release.
+- Not already be the currently deployed digest.
+
+ After deployment, Kubernetes is checked again.
+
+ Expected:
+
+```
+ECR:
+
+payment-service@sha256:BBB
+
+Kubernetes:
+
+payment-service@sha256:BBB
+```
+
+ If they do not match, the rollback fails.
+
+---
+
+ # Rollback History
+
+ Every rollback is also recorded.
+
+```
+release-history/
+└── payment-service/
+    ├── v1.3.4.json
+    ├── v1.3.5.json
+    │
+    └── rollbacks/
+        └── 123456789.json
+```
+
+ Example:
+
+```
+{
+  "type": "rollback",
+  "service": "payment-service",
+  "restored_version": "v1.3.4",
+  "restored_digest": "sha256:BBB",
+  "restored_image_tag": "v1.3.4-a6f21bc",
+  "restored_commit": "a6f21bc123456789...",
+  "release_id": "payment-service-v1.3.4-a6f21bc",
+  "release_run_id": "111111111",
+  "rollback_workflow_run_id": "123456789",
+  "rollback_type": "previous",
+  "requested_by": "github-user",
+  "rolled_back_at": "2026-09-08T00:00:00Z"
+}
+```
+
+ This provides an audit trail for the rollback itself.
+
+---
+
+ # Complete ECR Lifecycle
+
+ Example release:
+
+```
+payment-service:v1.3.5-a7d39bc
+              │
+              ▼
+       sha256:6c41f3f5....
+```
+
+ After production:
+
+```
+payment-service:v1.3.5-a7d39bc ──┐
+                                 ├── sha256:6c41f3f5....
+payment-service:v1.3.5 ──────────┘
+```
+
+ Previous release:
+
+```
+payment-service:v1.3.4-a6f21bc
+payment-service:v1.3.4
+              │
+              ▼
+       sha256:previous....
+```
+
+ If rollback is required:
+
+```
+Production
+v1.3.5
+sha256:6c41f3f5....
+       │
+       ▼
+rollback.yaml
+       │
+       ▼
+v1.3.4
+sha256:previous....
+```
+
+ No image is rebuilt.
+
+---
+
+ # Source of Truth
+
+ The architecture intentionally distinguishes between human-readable identifiers and immutable identity.
+
+```
+Human Version
+     │
+     ▼
+v1.3.5
+
+Build Tag
+     │
+     ▼
+v1.3.5-a7d39bc
+
+Immutable Digest
+     │
+     ▼
+sha256:6c41f3f5....
+```
+
+ The source of truth is:
+
+```
+sha256:6c41f3f5....
+```
+
+ Not:
+
+```
+v1.3.5
+```
+
+ Not:
+
+```
+v1.3.5-a7d39bc
+```
+
+ The tags are labels.
+
+ The digest identifies the actual artifact.
+
+---
+
+ # Repository Structure
+
+ The recommended repository structure is:
+
+```
+.github/
+└── workflows/
+    ├── release.yaml
+    ├── staging.yaml
+    ├── production.yaml
+    └── rollback.yaml
+
+helm/
+├── Chart.yaml
+├── values.yaml
+└── templates/
+
+services/
+├── api-gateway/
+├── user-service/
+├── payment-service/
+├── wallet-service/
+├── transaction-service/
+├── notification-service/
+└── fraud-service/
+
+tests/
+├── smoke.sh
+├── integration.sh
+└── dast.sh
+
+release-history/
+├── payment-service/
+│   ├── v1.3.4.json
+│   ├── v1.3.5.json
+│   └── rollbacks/
+│
+├── wallet-service/
+│   └── ...
+│
+└── user-service/
+    └── ...
+```
+
+---
+
+ # Release Lifecycle
+
+```
+                         BUILD
+                           │
+                           ▼
+                    PUSH TO ECR
+                           │
+                           ▼
+                  CAPTURE DIGEST
+                           │
+                           ▼
+                  RELEASE METADATA
+                           │
+                           ▼
+                        STAGING
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+           FAILURE                    PASS
+              │                         │
+              ▼                         ▼
+            STOP                  PRODUCTION
+                                        │
+                                        ▼
+                                   APPROVAL
+                                        │
+                                        ▼
+                                   PRODUCTION
+                                        │
+                              ┌─────────┴─────────┐
+                              │                   │
+                           HEALTHY             FAILURE
+                              │                   │
+                              │                   ▼
+                              │              ROLLBACK
+                              │                   │
+                              │                   ▼
+                              │            KNOWN-GOOD
+                              │              DIGEST
+                              │                   │
+                              │                   ▼
+                              │              APPROVAL
+                              │                   │
+                              │                   ▼
+                              └──────────────► PRODUCTION
+```
+
+---
+
+ # Deployment Guarantees
+
+ This architecture provides:
+
+ - Build once.
+- Deploy many.
+- Immutable ECR digest.
+- No rebuild after staging.
+- Same artifact from staging to production.
+- Manual release selection.
+- Manual production approval.
+- Service-level releases.
+- Release traceability.
+- Commit traceability.
+- ECR digest traceability.
+- Staging test gates.
+- Production deployment verification.
+- Automatic production release history.
+- Auditable rollback.
+- Rollback to a known-good digest.
+- No rollback rebuild.
+- Cross-workflow release identity.
+
+---
+
+ # Operational Rules
+
+ The following rules should be treated as non-negotiable:
+
+```
+1. Never rebuild for production promotion.
+
+2. Never rebuild during rollback.
+
+3. Always deploy using the immutable digest.
+
+4. Always verify the digest exists in ECR.
+
+5. Always verify the deployed Kubernetes image digest.
+
+6. Production requires GitHub Environment approval.
+
+7. Release history is generated automatically after successful production deployment.
+
+8. Rollback uses release history to identify a known-good digest.
+
+9. Every rollback is recorded.
+
+10. The ECR digest is the source of truth.
+```
+
+---
+
+ # Final Model
+
+```
+                     ONE BUILD
+                         │
+                         ▼
+                  ONE RELEASE ID
+                         │
+                         ▼
+                  ONE ECR DIGEST
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+           STAGING              RELEASE HISTORY
+              │                     │
+              ▼                     │
+        TEST / DAST                 │
+              │                     │
+              ▼                     │
+         STAGING PASS               │
+              │                     │
+              ▼                     │
+         PRODUCTION                 │
+              │                     │
+              ▼                     │
+           APPROVAL                 │
+              │                     │
+              ▼                     │
+       SAME ECR DIGEST              │
+              │                     │
+              ▼                     │
+         PRODUCTION                │
+              │                     │
+        ┌─────┴─────┐              │
+        │           │              │
+     HEALTHY      FAILURE          │
+        │           │              │
+        │           ▼              │
+        │       ROLLBACK ◄─────────┘
+        │           │
+        │           ▼
+        │    KNOWN-GOOD DIGEST
+        │           │
+        │           ▼
+        │      APPROVAL
+        │           │
+        │           ▼
+        └──────► PRODUCTION
+```
+
+ ## Core Principle
+
+ > **Build once. Capture the immutable digest. Test that exact digest in staging. Require production approval. Deploy the same digest to production. If production fails, restore a previously known-good digest without rebuilding. Automatically record both releases and rollbacks for auditability.**
+
+ This is now the version I'd keep as the **master README** for the architecture. The only remaining implementation work is to make the four YAML workflows conform exactly to this README—especially the `release_id`/`release_run_id` handoff and automatic `release-history` generation.
