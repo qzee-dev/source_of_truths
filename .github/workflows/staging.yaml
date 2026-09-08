@@ -2,8 +2,12 @@ name: Deploy Staging
 
 on:
   workflow_dispatch:
-
     inputs:
+
+      release_id:
+        description: Release ID from Release workflow
+        required: true
+        type: string
 
       service:
         description: Service To Deploy
@@ -21,6 +25,11 @@ on:
 permissions:
   contents: read
   id-token: write
+  actions: read
+
+concurrency:
+  group: staging-${{ inputs.service }}
+  cancel-in-progress: false
 
 env:
   AWS_REGION: us-east-1
@@ -44,6 +53,8 @@ jobs:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       #################################################
       # Download Release Metadata
@@ -52,11 +63,12 @@ jobs:
       - name: Download Release Metadata
         uses: actions/download-artifact@v4
         with:
-          name: release-data
+          name: release-${{ inputs.release_id }}
           path: release
+          github-token: ${{ github.token }}
 
       #################################################
-      # AWS Credentials
+      # AWS Authentication
       #################################################
 
       - name: Configure AWS Credentials
@@ -66,108 +78,291 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       #################################################
-      # Configure Kubectl
-      #################################################
-
-      - name: Configure Kubectl
-        run: |
-
-          aws eks update-kubeconfig \
-            --region ${{ env.AWS_REGION }} \
-            --name fintech-staging
-
-      #################################################
       # Read Release Metadata
       #################################################
 
       - name: Read Release Metadata
+        shell: bash
         run: |
+
+          set -euo pipefail
 
           SERVICE=$(cat release/service.txt)
           VERSION=$(cat release/version.txt)
           IMAGE_TAG=$(cat release/image-tag.txt)
           DIGEST=$(cat release/digest.txt)
+          COMMIT=$(cat release/commit.txt)
+          RELEASE_ID=$(cat release/release-id.txt)
 
-          echo "SERVICE=$SERVICE" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-          echo "DIGEST=$DIGEST" >> $GITHUB_ENV
+          echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
+          echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
 
-          echo "Deploying:"
-          echo "Service: $SERVICE"
-          echo "Version: $VERSION"
-          echo "Image Tag: $IMAGE_TAG"
-          echo "Digest: $DIGEST"
+          echo "======================================"
+          echo "Release Metadata"
+          echo "======================================"
+          echo "Release ID : $RELEASE_ID"
+          echo "Service    : $SERVICE"
+          echo "Version    : $VERSION"
+          echo "Image Tag  : $IMAGE_TAG"
+          echo "Commit     : $COMMIT"
+          echo "Digest     : $DIGEST"
+          echo "======================================"
 
       #################################################
-      # Validate Selected Service
+      # Validate Release Identity
       #################################################
 
-      - name: Validate Selected Service
+      - name: Validate Release Identity
+        shell: bash
         run: |
 
-          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
-            echo "Service mismatch"
+          set -euo pipefail
+
+          if [[ "$RELEASE_ID" != "${{ inputs.release_id }}" ]]; then
+            echo "ERROR: Release ID mismatch."
+            echo "Expected: ${{ inputs.release_id }}"
+            echo "Actual  : $RELEASE_ID"
             exit 1
           fi
+
+          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
+            echo "ERROR: Service mismatch."
+            echo "Expected: ${{ inputs.service }}"
+            echo "Actual  : $SERVICE"
+            exit 1
+          fi
+
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "ERROR: Invalid image digest."
+            exit 1
+          fi
+
+          echo "Release identity validated."
+
+      #################################################
+      # Verify Commit Exists
+      #################################################
+
+      - name: Verify Source Commit
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          git cat-file -e "$COMMIT^{commit}"
+
+          echo "Source commit exists:"
+          echo "$COMMIT"
+
+      #################################################
+      # Verify Image Exists In ECR
+      #################################################
+
+      - name: Verify ECR Image
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          VERIFIED_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageDigest="$DIGEST" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ -z "$VERIFIED_DIGEST" || "$VERIFIED_DIGEST" == "None" ]]; then
+            echo "ERROR: Image digest does not exist in ECR."
+            echo "$SERVICE@$DIGEST"
+            exit 1
+          fi
+
+          if [[ "$VERIFIED_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: ECR digest mismatch."
+            echo "Expected: $DIGEST"
+            echo "Actual  : $VERIFIED_DIGEST"
+            exit 1
+          fi
+
+          echo "ECR image verified:"
+          echo "$SERVICE@$DIGEST"
+
+      #################################################
+      # Verify Image Tag Points To Same Digest
+      #################################################
+
+      - name: Verify Image Tag
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          TAG_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ "$TAG_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: Image tag does not point to release digest."
+            echo "Tag digest     : $TAG_DIGEST"
+            echo "Release digest : $DIGEST"
+            exit 1
+          fi
+
+          echo "Image tag verified:"
+          echo "$SERVICE:$IMAGE_TAG"
+          echo "Digest:"
+          echo "$DIGEST"
+
+      #################################################
+      # Configure Kubectl
+      #################################################
+
+      - name: Configure Kubectl
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name fintech-staging
 
       #################################################
       # Deploy Exact Digest
       #################################################
 
       - name: Deploy To Staging
+        shell: bash
         run: |
+
+          set -euo pipefail
 
           helm upgrade fintech ./helm \
             --install \
             --namespace staging \
-            --set image.repository=$SERVICE \
-            --set image.digest=$DIGEST
+            --create-namespace \
+            --set image.repository="$SERVICE" \
+            --set image.digest="$DIGEST"
 
       #################################################
       # Verify Rollout
       #################################################
 
       - name: Verify Rollout
+        shell: bash
         run: |
 
+          set -euo pipefail
+
           kubectl rollout status \
-            deployment/$SERVICE \
-            -n staging
+            deployment/"$SERVICE" \
+            --namespace staging \
+            --timeout=10m
+
+      #################################################
+      # Verify Deployed Digest
+      #################################################
+
+      - name: Verify Deployed Digest
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          EXPECTED_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE}@${DIGEST}"
+
+          echo "Expected image:"
+          echo "$EXPECTED_IMAGE"
+
+          kubectl get deployment "$SERVICE" \
+            --namespace staging \
+            -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+          echo ""
 
       #################################################
       # Smoke Tests
       #################################################
 
       - name: Smoke Tests
-        run: ./tests/smoke.sh
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          ./tests/smoke.sh
 
       #################################################
       # Integration Tests
       #################################################
 
       - name: Integration Tests
-        run: ./tests/integration.sh
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          ./tests/integration.sh
 
       #################################################
       # DAST
       #################################################
 
       - name: DAST
-        run: ./tests/dast.sh
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          ./tests/dast.sh
 
       #################################################
-      # Deployment Summary
+      # Staging Release Summary
       #################################################
 
       - name: Staging Deployment Summary
+        shell: bash
         run: |
 
-          echo "======================================"
+          echo ""
+          echo "=============================================="
           echo "STAGING DEPLOYMENT SUCCESSFUL"
-          echo "======================================"
-          echo "Service : $SERVICE"
-          echo "Version : $VERSION"
-          echo "Tag     : $IMAGE_TAG"
-          echo "Digest  : $DIGEST"
-          echo "======================================"
+          echo "=============================================="
+          echo ""
+          echo "Release ID:"
+          echo "$RELEASE_ID"
+          echo ""
+          echo "Service:"
+          echo "$SERVICE"
+          echo ""
+          echo "Version:"
+          echo "$VERSION"
+          echo ""
+          echo "Build Tag:"
+          echo "$IMAGE_TAG"
+          echo ""
+          echo "Commit:"
+          echo "$COMMIT"
+          echo ""
+          echo "Immutable Digest:"
+          echo "$DIGEST"
+          echo ""
+          echo "Environment:"
+          echo "staging"
+          echo ""
+          echo "Tests:"
+          echo "  ✓ Rollout"
+          echo "  ✓ Smoke"
+          echo "  ✓ Integration"
+          echo "  ✓ DAST"
+          echo ""
+          echo "=============================================="
+          echo "READY FOR PRODUCTION APPROVAL"
+          echo "=============================================="
