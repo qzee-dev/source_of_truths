@@ -212,6 +212,57 @@ argocd account update-password
 
 For a serious production deployment, I'd then configure SSO/OIDC for humans instead of continuing to use the local admin account.
 
+###########################################################################
+#12. Create ECR repositories
+#You have eight microservices, so I'd normally create eight ECR repositories:
+############################################################################
+
+for service in \
+  auth \
+  users \
+  orders \
+  payments \
+  notifications \
+  catalog \
+  gateway \
+  reporting
+do
+  aws ecr create-repository \
+    --repository-name "myapp/$service" \
+    --region "$AWS_REGION" \
+    --image-scanning-configuration scanOnPush=true \
+    || true
+done
+
+You get:
+
+ECR
+├── myapp/auth
+├── myapp/users
+├── myapp/orders
+├── myapp/payments
+├── myapp/notifications
+├── myapp/catalog
+├── myapp/gateway
+└── myapp/reporting
+
+I strongly recommend immutable image tags such as:
+
+git SHA
+
+Example:
+
+a8d91c2
+
+rather than:
+
+latest
+
+This is especially important for Image Updater because its non-digest strategies assume unique immutable tags. 
+A
+Argo CD Image Updater
+
+
 
 
 
