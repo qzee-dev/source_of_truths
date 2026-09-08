@@ -169,6 +169,26 @@ unless you have a strong reason to expose Argo publicly.
 #######################################################################
 #8. Install Argo CD
 #######################################################################
+helm upgrade --install argocd argo/argo-cd \
+  --namespace argocd \
+  --version "$ARGOCD_CHART_VERSION" \
+  --values values.yaml \
+  --wait
+
+
+Check:
+
+kubectl get pods -n argocd
+
+kubectl get ingress -n argocd
+
+
+You should eventually get something like:
+
+NAME            HOSTS
+argocd-server   argocd.example.com
+
+Argo CD's API server serves both HTTPS/gRPC and the web UI, so ingress configuration needs to account for those protocols. 
 
 
 
