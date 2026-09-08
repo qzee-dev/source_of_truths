@@ -1,28 +1,67 @@
-Image Updater can monitor registries such as ECR and automatically update the image used by an Argo CD application, with configuration depending on how you manage Git/write-back.
+Here is a concise version formatted for a GitHub `README.md`:
 
-So you essentially have two common approaches:
+ GitHub README — GitOps and Identity Architecture
 
-Approach     	    Who updates image tag?
-CI + GitOps     	CI pipeline
-Argo CD Image     Updater	Image Updater
+## Image Updates and GitOps
 
-For a clean GitOps architecture, I generally recommend the first approach:
+ Argo CD Image Updater can monitor registries such as Amazon ECR and automatically update image versions used by Argo CD applications. However, there are two common approaches:
 
-CI = build/test/push image
-Git = source of truth for desired deployment
-Argo CD = continuously reconcile Git → Kubernetes
+ | Approach | Who updates the image tag? |
+| --- | --- |
+| **CI + GitOps** | CI pipeline |
+| **Argo CD Image Updater** | Image Updater |
 
-That gives you a very nice audit trail because every production deployment corresponds to a Git commit.
+ For this architecture, we use **CI + GitOps**:
 
+```
+CI/CD     → Build, test, and push image to ECR
+Git       → Source of truth for the desired image version
+Argo CD   → Reconcile Git → Kubernetes
+```
 
+ This provides a clear audit trail because every production deployment corresponds to a Git commit.
 
-There are actually three different identity mechanisms involved, and separating them is important:
+ ### Identity Architecture
 
-1)GitHub Actions OIDC → lets GitHub Actions assume an AWS IAM role and push images to ECR. No AWS access keys stored in       GitHub.
-2)EKS Pod Identity → lets workloads inside EKS, such as Argo CD Image Updater, access AWS APIs such as ECR.
-3)IRSA → older/alternative EKS workload identity mechanism using the cluster's OIDC provider. AWS currently recommends EKS Pod Identity for new EKS workloads where supported.
+ There are three identity mechanisms to distinguish:
 
-I would use GitHub OIDC + EKS Pod Identity for a new implementation, and I'll show the IRSA equivalent as well.
+ 1. **GitHub Actions OIDC**
+   - Allows GitHub Actions to assume AWS IAM roles.
+   - Used to authenticate and push application images to ECR.
+   - No long-lived AWS access keys are stored in GitHub.
+2. **EKS Pod Identity**
+   - Allows workloads running inside EKS to access AWS APIs.
+   - Can be used by workloads such as Argo CD components that need ECR access.
+   - Preferred for new EKS workloads where supported.
+3. **IRSA**
+   - An alternative EKS workload identity mechanism.
+   - Uses the cluster's OIDC provider.
+   - Kept as an alternative for workloads or environments where IRSA is required.
 
+ ### Recommended Identity Model
 
+ For a new implementation:
 
+```
+GitHub Actions
+      │
+      │ GitHub OIDC
+      ▼
+AWS IAM Role
+      │
+      │ Push
+      ▼
+     ECR
+
+EKS Workload
+      │
+      │ EKS Pod Identity
+      ▼
+AWS IAM Role
+      │
+      │ Read/Access
+      ▼
+     ECR
+```
+
+ This keeps **CI authentication** and **EKS workload authentication** separate while avoiding long-lived AWS credentials.
