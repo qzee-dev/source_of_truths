@@ -4,8 +4,13 @@ on:
   workflow_dispatch:
     inputs:
 
+      release_run_id:
+        description: Release Workflow Run ID
+        required: true
+        type: string
+
       release_id:
-        description: Release ID from Release workflow
+        description: Release ID From Release Workflow
         required: true
         type: string
 
@@ -66,6 +71,7 @@ jobs:
           name: release-${{ inputs.release_id }}
           path: release
           github-token: ${{ github.token }}
+          run-id: ${{ inputs.release_run_id }}
 
       #################################################
       # AWS Authentication
@@ -93,6 +99,7 @@ jobs:
           DIGEST=$(cat release/digest.txt)
           COMMIT=$(cat release/commit.txt)
           RELEASE_ID=$(cat release/release-id.txt)
+          RELEASE_RUN_ID=$(cat release/release-run-id.txt)
 
           echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -100,16 +107,18 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
           echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+          echo "RELEASE_RUN_ID=$RELEASE_RUN_ID" >> "$GITHUB_ENV"
 
           echo "======================================"
           echo "Release Metadata"
           echo "======================================"
-          echo "Release ID : $RELEASE_ID"
-          echo "Service    : $SERVICE"
-          echo "Version    : $VERSION"
-          echo "Image Tag  : $IMAGE_TAG"
-          echo "Commit     : $COMMIT"
-          echo "Digest     : $DIGEST"
+          echo "Release ID     : $RELEASE_ID"
+          echo "Release Run ID : $RELEASE_RUN_ID"
+          echo "Service        : $SERVICE"
+          echo "Version        : $VERSION"
+          echo "Image Tag      : $IMAGE_TAG"
+          echo "Commit         : $COMMIT"
+          echo "Digest         : $DIGEST"
           echo "======================================"
 
       #################################################
@@ -129,6 +138,13 @@ jobs:
             exit 1
           fi
 
+          if [[ "$RELEASE_RUN_ID" != "${{ inputs.release_run_id }}" ]]; then
+            echo "ERROR: Release Run ID mismatch."
+            echo "Expected: ${{ inputs.release_run_id }}"
+            echo "Actual  : $RELEASE_RUN_ID"
+            exit 1
+          fi
+
           if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
             echo "ERROR: Service mismatch."
             echo "Expected: ${{ inputs.service }}"
@@ -144,7 +160,7 @@ jobs:
           echo "Release identity validated."
 
       #################################################
-      # Verify Commit Exists
+      # Verify Source Commit
       #################################################
 
       - name: Verify Source Commit
@@ -192,7 +208,7 @@ jobs:
           echo "$SERVICE@$DIGEST"
 
       #################################################
-      # Verify Image Tag Points To Same Digest
+      # Verify Image Tag
       #################################################
 
       - name: Verify Image Tag
@@ -215,10 +231,7 @@ jobs:
             exit 1
           fi
 
-          echo "Image tag verified:"
-          echo "$SERVICE:$IMAGE_TAG"
-          echo "Digest:"
-          echo "$DIGEST"
+          echo "Image tag verified."
 
       #################################################
       # Configure Kubectl
@@ -278,14 +291,20 @@ jobs:
 
           EXPECTED_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE}@${DIGEST}"
 
-          echo "Expected image:"
+          DEPLOYED_IMAGE=$(kubectl get deployment "$SERVICE" \
+            --namespace staging \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+          echo "Expected:"
           echo "$EXPECTED_IMAGE"
 
-          kubectl get deployment "$SERVICE" \
-            --namespace staging \
-            -o jsonpath='{.spec.template.spec.containers[0].image}'
+          echo "Deployed:"
+          echo "$DEPLOYED_IMAGE"
 
-          echo ""
+          if [[ "$DEPLOYED_IMAGE" != "$EXPECTED_IMAGE" ]]; then
+            echo "ERROR: Staging deployment does not reference approved digest."
+            exit 1
+          fi
 
       #################################################
       # Smoke Tests
@@ -324,11 +343,10 @@ jobs:
           ./tests/dast.sh
 
       #################################################
-      # Staging Release Summary
+      # Staging Summary
       #################################################
 
       - name: Staging Deployment Summary
-        shell: bash
         run: |
 
           echo ""
@@ -338,6 +356,9 @@ jobs:
           echo ""
           echo "Release ID:"
           echo "$RELEASE_ID"
+          echo ""
+          echo "Release Run ID:"
+          echo "$RELEASE_RUN_ID"
           echo ""
           echo "Service:"
           echo "$SERVICE"
@@ -354,9 +375,6 @@ jobs:
           echo "Immutable Digest:"
           echo "$DIGEST"
           echo ""
-          echo "Environment:"
-          echo "staging"
-          echo ""
           echo "Tests:"
           echo "  ✓ Rollout"
           echo "  ✓ Smoke"
@@ -364,5 +382,5 @@ jobs:
           echo "  ✓ DAST"
           echo ""
           echo "=============================================="
-          echo "READY FOR PRODUCTION APPROVAL"
+          echo "READY FOR PRODUCTION"
           echo "=============================================="
