@@ -191,6 +191,33 @@ argocd-server   argocd.example.com
 Argo CD's API server serves both HTTPS/gRPC and the web UI, so ingress configuration needs to account for those protocols. 
 
 
+##################################################################################
+# 9. Get the initial Argo CD admin password
+###################################################################################
+kubectl -n argocd \
+  get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d
+
+echo
+
+Login:
+
+argocd login argocd.example.com \
+  --username admin \
+  --password '<PASSWORD>'
+
+Then immediately change the password:
+
+argocd account update-password
+
+For a serious production deployment, I'd then configure SSO/OIDC for humans instead of continuing to use the local admin account.
+
+
+
+
+
+
+
 
 
 
