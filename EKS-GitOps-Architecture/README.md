@@ -38,30 +38,164 @@ Argo CD   → Reconcile Git → Kubernetes
    - Uses the cluster's OIDC provider.
    - Kept as an alternative for workloads or environments where IRSA is required.
 
- ### Recommended Identity Model
+Yes. The identity model should be merged into your actual architecture so it is clear **who authenticates to AWS, what role they assume, and what they are allowed to do**.
 
- For a new implementation:
+ Recommended Identity and GitOps Architecture✓
+
+## Recommended Identity and GitOps Architecture
+
+ The deployment architecture separates **application CI**, **container storage**, **GitOps**, and **Kubernetes workload identity**.
 
 ```
-GitHub Actions
-      │
-      │ GitHub OIDC
-      ▼
-AWS IAM Role
-      │
-      │ Push
-      ▼
-     ECR
+                    Application Git Repo
+                            │
+                            │ git push
+                            ▼
+                     GitHub Actions
+                            │
+                            │ GitHub OIDC
+                            ▼
+                 Service-Specific IAM Role
+                            │
+                            │ ECR push permission
+                            │ only for its own repository
+                            ▼
+                Service-Specific ECR Repository
+                            │
+                            │ image: <git-sha>
+                            ▼
+                    Manifest Git Repo
+                            │
+                            │ desired image version
+                            ▼
+                         Argo CD
+                            │
+                            │ reconcile
+                            ▼
+                           EKS
+                            │
+                            │ EKS Pod Identity
+                            ▼
+                    AWS IAM Role (if needed)
+                            │
+                            │ AWS API access
+                            ▼
+                    AWS Services such as ECR
+```
 
+ ### Identity Responsibilities
+
+ #### 1\. GitHub Actions → AWS
+
+ GitHub Actions uses **GitHub OIDC** to assume a service-specific IAM role.
+
+```
+myorg/myapp-auth
+       │
+       │ GitHub OIDC
+       ▼
+GitHubActionsECR-auth
+       │
+       │ Push only
+       ▼
+myapp/auth
+```
+
+ The same pattern is used for every service:
+
+```
+myapp-users        → GitHubActionsECR-users
+myapp-orders       → GitHubActionsECR-orders
+myapp-payments     → GitHubActionsECR-payments
+myapp-notifications → GitHubActionsECR-notifications
+myapp-catalog      → GitHubActionsECR-catalog
+myapp-gateway      → GitHubActionsECR-gateway
+myapp-reporting    → GitHubActionsECR-reporting
+```
+
+ Each role is restricted to its corresponding ECR repository.
+
+ No long-lived AWS access keys are stored in GitHub.
+
+ #### 2\. CI → ECR
+
+ GitHub Actions builds and pushes an image using the Git commit SHA:
+
+```
+123456789012.dkr.ecr.eu-west-1.amazonaws.com/myapp/auth:4f83c91
+```
+
+ The CI pipeline then updates the corresponding image tag in the **Manifest Git Repo**.
+
+ #### 3\. Manifest Git Repo → Argo CD
+
+ The manifest repository is the source of truth for the desired Kubernetes state.
+
+ For example:
+
+```
+images:
+  - name: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/myapp/auth
+    newTag: 4f83c91
+```
+
+ Argo CD watches this repository and reconciles the desired state into EKS.
+
+```
+Manifest Git Repo
+       │
+       │ Git commit
+       ▼
+     Argo CD
+       │
+       ▼
+      EKS
+```
+
+ #### 4\. EKS → AWS
+
+ For Kubernetes workloads that need to call AWS APIs, use **EKS Pod Identity**.
+
+```
 EKS Workload
-      │
-      │ EKS Pod Identity
-      ▼
+     │
+     │ Pod Identity
+     ▼
 AWS IAM Role
-      │
-      │ Read/Access
-      ▼
-     ECR
+     │
+     ▼
+AWS Services
 ```
 
- This keeps **CI authentication** and **EKS workload authentication** separate while avoiding long-lived AWS credentials.
+ This identity is separate from the GitHub Actions roles.
+
+ ### Separation of Responsibilities
+
+```
+GitHub OIDC
+    │
+    └── CI authentication
+          └── Push images to ECR
+
+ECR
+    │
+    └── Store immutable application images
+
+Git
+    │
+    └── Desired deployment state
+
+Argo CD
+    │
+    └── Git → Kubernetes reconciliation
+
+EKS Pod Identity
+    │
+    └── AWS access for Kubernetes workloads
+```
+
+ The key security principle is:
+
+ > **GitHub Actions pushes images; Git stores the desired version; Argo CD deploys it; EKS workloads use Pod Identity when they need AWS access.**
+
+ This keeps CI credentials, container storage, deployment state, and runtime AWS permissions properly separated.
