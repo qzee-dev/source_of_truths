@@ -72,4 +72,107 @@ Create namespace:
 
 kubectl create namespace argocd
 
+######################################################################
+#7. Create secure Argo CD Helm values
+#######################################################################
+create:
+mkdir -p infrastructure/argocd
+cd infrastructure/argocd
+
+
+Create:
+values.yaml
+
+for example:
+global:
+  domain: argocd.example.com
+
+configs:
+  params:
+    server.insecure: "false"
+
+server:
+  replicas: 2
+
+  ingress:
+    enabled: true
+    controller: aws
+    ingressClassName: alb
+    hostname: argocd.example.com
+    tls: false
+
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internal
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:eu-west-1:123456789012:certificate/xxxxxxxx
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      alb.ingress.kubernetes.io/backend-protocol: HTTPS
+      alb.ingress.kubernetes.io/healthcheck-protocol: HTTPS
+      alb.ingress.kubernetes.io/healthcheck-path: /healthz
+      alb.ingress.kubernetes.io/success-codes: "200"
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+
+repoServer:
+  replicas: 2
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+
+controller:
+  replicas: 1
+
+applicationSet:
+  replicas: 2
+
+notifications:
+  enabled: true
+
+global:
+  networkPolicy:
+    create: true
+    defaultDenyIngress: true
+
+Important: the exact available Helm values depend on the chart version you pin, so always validate your values against the chart version you're installing. 
+The official chart exposes ingress, TLS, service accounts, network policies and other security controls. 
+
+For an internet-facing Argo CD, change:
+
+alb.ingress.kubernetes.io/scheme: internet-facing
+
+But for production, I prefer:
+
+
+
+VPN / corporate network
+        │
+        ▼
+Internal ALB
+        │
+        ▼
+Argo CD
+
+unless you have a strong reason to expose Argo publicly.
+
+#######################################################################
+#8. Install Argo CD
+#######################################################################
+
+
+
+
+
+
 
