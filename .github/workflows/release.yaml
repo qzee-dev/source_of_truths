@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      service:
+        description: Service To Release
+        required: true
+        type: choice
+        options:
+          - api-gateway
+          - user-service
+          - payment-service
+          - wallet-service
+          - transaction-service
+          - notification-service
+          - fraud-service
+
+      version:
+        description: Release Version (Example: v1.3.5)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com"
+
+jobs:
+
+  release:
+
+    name: Build And Publish Image
+
+    runs-on: ubuntu-latest
+
+    outputs:
+      service: ${{ steps.meta.outputs.service }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+
+      #################################################
+      # Checkout
+      #################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      #################################################
+      # Validate Version
+      #################################################
+
+      - name: Validate Version
+        run: |
+
+          VERSION="${{ inputs.version }}"
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version"
+            exit 1
+          fi
+
+      #################################################
+      # Metadata
+      #################################################
+
+      - name: Generate Metadata
+        id: meta
+        run: |
+
+          COMMIT=$(git rev-parse --short HEAD)
+
+          IMAGE_TAG="${{ inputs.version }}-${COMMIT}"
+
+          echo "service=${{ inputs.service }}" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      #################################################
+      # Node
+      #################################################
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      #################################################
+      # pnpm
+      #################################################
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      #################################################
+      # Dependencies
+      #################################################
+
+      - run: pnpm install --frozen-lockfile
+
+      #################################################
+      # AWS Authentication
+      #################################################
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      #################################################
+      # ECR Login
+      #################################################
+
+      - name: Login To ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      #################################################
+      # Build Selected Service
+      #################################################
+
+      - name: Build Docker Image
+        run: |
+
+          docker build \
+            -f services/${{ inputs.service }}/Dockerfile \
+            -t $ECR_REGISTRY/${{ inputs.service }}:${IMAGE_TAG} .
+
+      #################################################
+      # Push Selected Service
+      #################################################
+
+      - name: Push Docker Image
+        run: |
+
+          docker push \
+            $ECR_REGISTRY/${{ inputs.service }}:${IMAGE_TAG}
+
+      #################################################
+      # Capture Immutable Digest
+      #################################################
+
+      - name: Capture Digest
+        run: |
+
+          mkdir -p release
+
+          DIGEST=$(aws ecr describe-images \
+            --repository-name ${{ inputs.service }} \
+            --image-ids imageTag=${IMAGE_TAG} \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          echo "$DIGEST" > release/digest.txt
+
+          echo "${{ inputs.service }}" > release/service.txt
+
+          echo "${{ inputs.version }}" > release/version.txt
+
+          echo "$IMAGE_TAG" > release/image-tag.txt
+
+      #################################################
+      # Upload Release Metadata
+      #################################################
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-data
+          path: release/
