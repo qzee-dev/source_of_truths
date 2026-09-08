@@ -1,0 +1,537 @@
+name: Rollback Production
+
+on:
+  workflow_dispatch:
+    inputs:
+
+      service:
+        description: Service To Rollback
+        required: true
+        type: choice
+        options:
+          - api-gateway
+          - user-service
+          - payment-service
+          - wallet-service
+          - transaction-service
+          - notification-service
+          - fraud-service
+
+      rollback_type:
+        description: Rollback Type
+        required: true
+        type: choice
+        options:
+          - previous
+          - specific
+
+      target_version:
+        description: Required only when rollback type is specific (Example: v1.3.4)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-rollback-${{ inputs.service }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+
+  rollback:
+
+    name: Rollback Production
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    steps:
+
+      #################################################
+      # Checkout
+      #################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      #################################################
+      # Validate Rollback Request
+      #################################################
+
+      - name: Validate Rollback Request
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          if [[ "${{ inputs.rollback_type }}" == "specific" ]]; then
+
+            VERSION="${{ inputs.target_version }}"
+
+            if [[ -z "$VERSION" ]]; then
+              echo "ERROR: target_version is required for specific rollback."
+              exit 1
+            fi
+
+            if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "ERROR: Invalid version: $VERSION"
+              echo "Expected format: v1.3.4"
+              exit 1
+            fi
+
+          fi
+
+      #################################################
+      # Discover Previous Production Release
+      #################################################
+
+      - name: Discover Previous Production Release
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          SERVICE="${{ inputs.service }}"
+
+          DIRECTORY="release-history/$SERVICE"
+
+          if [[ ! -d "$DIRECTORY" ]]; then
+            echo "ERROR: No release history exists for $SERVICE."
+            exit 1
+          fi
+
+          echo "Release history:"
+          ls -la "$DIRECTORY"
+
+          CURRENT_IMAGE=$(kubectl get deployment "$SERVICE" \
+            --namespace production \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+
+          echo "Current production image:"
+          echo "$CURRENT_IMAGE"
+
+          CURRENT_DIGEST=""
+
+          if [[ "$CURRENT_IMAGE" == *@* ]]; then
+            CURRENT_DIGEST="${CURRENT_IMAGE##*@}"
+          fi
+
+          echo "CURRENT_DIGEST=$CURRENT_DIGEST" >> "$GITHUB_ENV"
+
+      #################################################
+      # AWS Authentication
+      #################################################
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      #################################################
+      # Configure Kubectl
+      #################################################
+
+      - name: Configure Kubectl
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name fintech-production
+
+      #################################################
+      # Resolve Rollback Target
+      #################################################
+
+      - name: Resolve Rollback Target
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          SERVICE="${{ inputs.service }}"
+          ROLLBACK_TYPE="${{ inputs.rollback_type }}"
+
+          DIRECTORY="release-history/$SERVICE"
+
+          if [[ "$ROLLBACK_TYPE" == "specific" ]]; then
+
+            TARGET_VERSION="${{ inputs.target_version }}"
+            FILE="$DIRECTORY/$TARGET_VERSION.json"
+
+            if [[ ! -f "$FILE" ]]; then
+              echo "ERROR: Release history not found:"
+              echo "$FILE"
+              exit 1
+            fi
+
+          else
+
+            echo "Finding previous production release."
+
+            CURRENT_DIGEST=$(kubectl get deployment "$SERVICE" \
+              --namespace production \
+              -o jsonpath='{.spec.template.spec.containers[0].image}' \
+              | awk -F@ '{print $2}')
+
+            if [[ -z "$CURRENT_DIGEST" ]]; then
+              echo "ERROR: Unable to determine current production digest."
+              exit 1
+            fi
+
+            echo "Current production digest:"
+            echo "$CURRENT_DIGEST"
+
+            FILE=""
+
+            while IFS= read -r candidate; do
+
+              CANDIDATE_DIGEST=$(jq -r '.digest' "$candidate")
+
+              if [[ "$CANDIDATE_DIGEST" != "$CURRENT_DIGEST" ]]; then
+                FILE="$candidate"
+                break
+              fi
+
+            done < <(
+              find "$DIRECTORY" \
+                -type f \
+                -name 'v*.json' \
+                -print \
+                | sort -Vr
+            )
+
+            if [[ -z "$FILE" ]]; then
+              echo "ERROR: No previous production release found."
+              exit 1
+            fi
+
+          fi
+
+          echo "Selected release history:"
+          echo "$FILE"
+
+          SERVICE_VALUE=$(jq -r '.service' "$FILE")
+          VERSION_VALUE=$(jq -r '.version' "$FILE")
+          RELEASE_ID_VALUE=$(jq -r '.release_id' "$FILE")
+          RELEASE_RUN_ID_VALUE=$(jq -r '.release_run_id' "$FILE")
+          IMAGE_TAG_VALUE=$(jq -r '.image_tag' "$FILE")
+          DIGEST_VALUE=$(jq -r '.digest' "$FILE")
+          COMMIT_VALUE=$(jq -r '.commit' "$FILE")
+
+          echo "SERVICE=$SERVICE_VALUE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION_VALUE" >> "$GITHUB_ENV"
+          echo "RELEASE_ID=$RELEASE_ID_VALUE" >> "$GITHUB_ENV"
+          echo "RELEASE_RUN_ID=$RELEASE_RUN_ID_VALUE" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG_VALUE" >> "$GITHUB_ENV"
+          echo "DIGEST=$DIGEST_VALUE" >> "$GITHUB_ENV"
+          echo "COMMIT=$COMMIT_VALUE" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "=============================================="
+          echo "ROLLBACK TARGET"
+          echo "=============================================="
+          echo "Service        : $SERVICE_VALUE"
+          echo "Version        : $VERSION_VALUE"
+          echo "Release ID     : $RELEASE_ID_VALUE"
+          echo "Release Run ID : $RELEASE_RUN_ID_VALUE"
+          echo "Image Tag      : $IMAGE_TAG_VALUE"
+          echo "Commit         : $COMMIT_VALUE"
+          echo "Digest         : $DIGEST_VALUE"
+          echo "=============================================="
+
+      #################################################
+      # Validate Release Metadata
+      #################################################
+
+      - name: Validate Release Metadata
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
+            echo "ERROR: Service mismatch."
+            exit 1
+          fi
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid release version."
+            exit 1
+          fi
+
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "ERROR: Invalid ECR digest."
+            exit 1
+          fi
+
+          if [[ -z "$RELEASE_ID" ]]; then
+            echo "ERROR: Missing release ID."
+            exit 1
+          fi
+
+          if [[ -z "$COMMIT" ]]; then
+            echo "ERROR: Missing commit."
+            exit 1
+          fi
+
+          echo "Release metadata validated."
+
+      #################################################
+      # Verify Target Digest Exists In ECR
+      #################################################
+
+      - name: Verify Target Digest
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          ECR_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageDigest="$DIGEST" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ "$ECR_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: Target digest does not exist in ECR."
+            echo "Expected: $DIGEST"
+            echo "Actual:   $ECR_DIGEST"
+            exit 1
+          fi
+
+          echo "Target image exists:"
+          echo "$SERVICE@$DIGEST"
+
+      #################################################
+      # Verify Target Build Tag
+      #################################################
+
+      - name: Verify Target Build Tag
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          TAG_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ "$TAG_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: Build tag does not point to target digest."
+            echo "Build tag digest : $TAG_DIGEST"
+            echo "Target digest    : $DIGEST"
+            exit 1
+          fi
+
+          echo "Build tag verified."
+
+      #################################################
+      # Prevent No-Op Rollback
+      #################################################
+
+      - name: Prevent No-Op Rollback
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          CURRENT_IMAGE=$(kubectl get deployment "$SERVICE" \
+            --namespace production \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+          CURRENT_DIGEST="${CURRENT_IMAGE##*@}"
+
+          echo "Current production digest:"
+          echo "$CURRENT_DIGEST"
+
+          echo "Rollback target digest:"
+          echo "$DIGEST"
+
+          if [[ "$CURRENT_DIGEST" == "$DIGEST" ]]; then
+            echo "ERROR: Target release is already running in production."
+            exit 1
+          fi
+
+      #################################################
+      # Production Approval
+      #################################################
+
+      - name: Rollback Approval
+        run: |
+
+          echo ""
+          echo "=============================================="
+          echo "PRODUCTION ROLLBACK APPROVAL"
+          echo "=============================================="
+          echo ""
+          echo "Service:"
+          echo "$SERVICE"
+          echo ""
+          echo "Current Digest:"
+          echo "$CURRENT_DIGEST"
+          echo ""
+          echo "Target Version:"
+          echo "$VERSION"
+          echo ""
+          echo "Target Digest:"
+          echo "$DIGEST"
+          echo ""
+          echo "Target Commit:"
+          echo "$COMMIT"
+          echo ""
+          echo "Requested By:"
+          echo "$GITHUB_ACTOR"
+          echo ""
+          echo "=============================================="
+
+      #################################################
+      # Deploy Known Good Digest
+      #################################################
+
+      - name: Deploy Rollback Digest
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          helm upgrade fintech ./helm \
+            --install \
+            --namespace production \
+            --create-namespace \
+            --set image.repository="$SERVICE" \
+            --set image.digest="$DIGEST"
+
+      #################################################
+      # Verify Rollout
+      #################################################
+
+      - name: Verify Rollout
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          kubectl rollout status \
+            deployment/"$SERVICE" \
+            --namespace production \
+            --timeout=10m
+
+      #################################################
+      # Verify Deployed Digest
+      #################################################
+
+      - name: Verify Deployed Digest
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          EXPECTED_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE}@${DIGEST}"
+
+          DEPLOYED_IMAGE=$(kubectl get deployment "$SERVICE" \
+            --namespace production \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+          echo "Expected:"
+          echo "$EXPECTED_IMAGE"
+
+          echo "Deployed:"
+          echo "$DEPLOYED_IMAGE"
+
+          if [[ "$DEPLOYED_IMAGE" != "$EXPECTED_IMAGE" ]]; then
+            echo "ERROR: Rollback digest verification failed."
+            exit 1
+          fi
+
+          echo "Rollback digest successfully deployed."
+
+      #################################################
+      # Record Rollback
+      #################################################
+
+      - name: Record Rollback
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          mkdir -p release-history/"$SERVICE"/rollbacks
+
+          cat <<EOF > "release-history/$SERVICE/rollbacks/${GITHUB_RUN_ID}.json"
+          {
+            "type": "rollback",
+            "service": "${SERVICE}",
+            "restored_version": "${VERSION}",
+            "restored_digest": "${DIGEST}",
+            "restored_image_tag": "${IMAGE_TAG}",
+            "restored_commit": "${COMMIT}",
+            "release_id": "${RELEASE_ID}",
+            "release_run_id": "${RELEASE_RUN_ID}",
+            "rollback_workflow_run_id": "${GITHUB_RUN_ID}",
+            "rollback_type": "${{ inputs.rollback_type }}",
+            "requested_by": "${GITHUB_ACTOR}",
+            "rolled_back_at": "$(date -u +%FT%TZ)"
+          }
+          EOF
+
+      #################################################
+      # Summary
+      #################################################
+
+      - name: Rollback Summary
+        run: |
+
+          echo ""
+          echo "=============================================="
+          echo "PRODUCTION ROLLBACK SUCCESSFUL"
+          echo "=============================================="
+          echo ""
+          echo "Service:"
+          echo "$SERVICE"
+          echo ""
+          echo "Restored Version:"
+          echo "$VERSION"
+          echo ""
+          echo "Restored Image:"
+          echo "$IMAGE_TAG"
+          echo ""
+          echo "Restored Digest:"
+          echo "$DIGEST"
+          echo ""
+          echo "Original Commit:"
+          echo "$COMMIT"
+          echo ""
+          echo "Release ID:"
+          echo "$RELEASE_ID"
+          echo ""
+          echo "Release Run ID:"
+          echo "$RELEASE_RUN_ID"
+          echo ""
+          echo "Rollback Workflow Run ID:"
+          echo "$GITHUB_RUN_ID"
+          echo ""
+          echo "Requested By:"
+          echo "$GITHUB_ACTOR"
+          echo ""
+          echo "=============================================="
+          echo "NO REBUILD"
+          echo "NO NEW IMAGE"
+          echo "EXACT KNOWN-GOOD DIGEST RESTORED"
+          echo "=============================================="
