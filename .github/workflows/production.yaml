@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
     inputs:
 
+      release_run_id:
+        description: Release Workflow Run ID
+        required: true
+        type: string
+
       release_id:
         description: Release ID From Release Workflow
         required: true
@@ -71,6 +76,7 @@ jobs:
           name: release-${{ inputs.release_id }}
           path: release
           github-token: ${{ github.token }}
+          run-id: ${{ inputs.release_run_id }}
 
       #################################################
       # AWS Authentication
@@ -98,6 +104,7 @@ jobs:
           DIGEST=$(cat release/digest.txt)
           COMMIT=$(cat release/commit.txt)
           RELEASE_ID=$(cat release/release-id.txt)
+          RELEASE_RUN_ID=$(cat release/release-run-id.txt)
 
           echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -105,16 +112,18 @@ jobs:
           echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
           echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
           echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+          echo "RELEASE_RUN_ID=$RELEASE_RUN_ID" >> "$GITHUB_ENV"
 
           echo "======================================"
           echo "Release Metadata"
           echo "======================================"
-          echo "Release ID : $RELEASE_ID"
-          echo "Service    : $SERVICE"
-          echo "Version    : $VERSION"
-          echo "Image Tag  : $IMAGE_TAG"
-          echo "Commit     : $COMMIT"
-          echo "Digest     : $DIGEST"
+          echo "Release ID     : $RELEASE_ID"
+          echo "Release Run ID : $RELEASE_RUN_ID"
+          echo "Service        : $SERVICE"
+          echo "Version        : $VERSION"
+          echo "Image Tag      : $IMAGE_TAG"
+          echo "Commit         : $COMMIT"
+          echo "Digest         : $DIGEST"
           echo "======================================"
 
       #################################################
@@ -129,15 +138,18 @@ jobs:
 
           if [[ "$RELEASE_ID" != "${{ inputs.release_id }}" ]]; then
             echo "ERROR: Release ID mismatch."
-            echo "Expected: ${{ inputs.release_id }}"
-            echo "Actual  : $RELEASE_ID"
+            exit 1
+          fi
+
+          if [[ "$RELEASE_RUN_ID" != "${{ inputs.release_run_id }}" ]]; then
+            echo "ERROR: Release Run ID mismatch."
+            echo "Expected: ${{ inputs.release_run_id }}"
+            echo "Actual  : $RELEASE_RUN_ID"
             exit 1
           fi
 
           if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
             echo "ERROR: Service mismatch."
-            echo "Expected: ${{ inputs.service }}"
-            echo "Actual  : $SERVICE"
             exit 1
           fi
 
@@ -190,9 +202,6 @@ jobs:
             --region "$AWS_REGION" \
             > /dev/null
 
-          echo "ECR repository verified:"
-          echo "$SERVICE"
-
       #################################################
       # Verify ECR Tag Immutability
       #################################################
@@ -209,15 +218,13 @@ jobs:
             --query 'repositories[0].imageTagMutability' \
             --output text)
 
-          echo "ECR tag mutability: $MUTABILITY"
-
           if [[ "$MUTABILITY" != "IMMUTABLE" ]]; then
             echo "ERROR: ECR repository must use IMMUTABLE image tags."
             exit 1
           fi
 
       #################################################
-      # Verify Exact Digest Exists
+      # Verify Exact Digest
       #################################################
 
       - name: Verify ECR Digest
@@ -233,20 +240,14 @@ jobs:
             --query 'imageDetails[0].imageDigest' \
             --output text)
 
-          if [[ -z "$VERIFIED_DIGEST" || "$VERIFIED_DIGEST" == "None" ]]; then
-            echo "ERROR: Release digest does not exist in ECR."
-            echo "$SERVICE@$DIGEST"
-            exit 1
-          fi
-
           if [[ "$VERIFIED_DIGEST" != "$DIGEST" ]]; then
-            echo "ERROR: Digest mismatch."
+            echo "ERROR: ECR digest mismatch."
             echo "Expected: $DIGEST"
             echo "Actual  : $VERIFIED_DIGEST"
             exit 1
           fi
 
-          echo "Exact release digest verified:"
+          echo "Approved digest verified:"
           echo "$SERVICE@$DIGEST"
 
       #################################################
@@ -267,17 +268,23 @@ jobs:
             --output text)
 
           if [[ "$TAG_DIGEST" != "$DIGEST" ]]; then
-            echo "ERROR: Build tag does not point to release digest."
-            echo "Build tag digest : $TAG_DIGEST"
-            echo "Release digest   : $DIGEST"
+            echo "ERROR: Build tag does not point to approved digest."
             exit 1
           fi
 
-          echo "Build tag verified:"
-          echo "$SERVICE:$IMAGE_TAG"
+      #################################################
+      # Production Approval
+      #################################################
+
+      - name: Production Approval
+        run: |
+
+          echo "Production environment approval has been granted."
+          echo "Release: $RELEASE_ID"
+          echo "Digest : $DIGEST"
 
       #################################################
-      # Create Human-Readable Production Tag
+      # Create Production Version Tag
       #################################################
 
       - name: Create Production Release Tag
@@ -299,13 +306,11 @@ jobs:
               echo "ERROR: Production version already points to another digest."
               echo "Version: $VERSION"
               echo "Existing digest: $EXISTING_DIGEST"
-              echo "Release digest : $DIGEST"
+              echo "Approved digest: $DIGEST"
               exit 1
             fi
 
-            echo "Production version already points to the correct digest."
-            echo "No tag mutation required."
-
+            echo "Production version already points to approved digest."
             exit 0
           fi
 
@@ -327,9 +332,6 @@ jobs:
             --image-manifest "$MANIFEST" \
             --region "$AWS_REGION"
 
-          echo "Production release tag created:"
-          echo "$SERVICE:$VERSION"
-
       #################################################
       # Verify Production Tag
       #################################################
@@ -349,12 +351,10 @@ jobs:
 
           if [[ "$PRODUCTION_DIGEST" != "$DIGEST" ]]; then
             echo "ERROR: Production tag does not point to approved digest."
-            echo "Production tag : $PRODUCTION_DIGEST"
-            echo "Approved digest: $DIGEST"
             exit 1
           fi
 
-          echo "Production tag verified."
+          echo "Production tag verified:"
           echo "$SERVICE:$VERSION"
           echo "$SERVICE@$DIGEST"
 
@@ -405,7 +405,7 @@ jobs:
             --timeout=10m
 
       #################################################
-      # Verify Production Deployment Identity
+      # Verify Production Digest
       #################################################
 
       - name: Verify Deployed Digest
@@ -420,18 +420,16 @@ jobs:
             --namespace production \
             -o jsonpath='{.spec.template.spec.containers[0].image}')
 
-          echo "Expected image:"
+          echo "Expected:"
           echo "$EXPECTED_IMAGE"
 
-          echo "Deployed image:"
+          echo "Deployed:"
           echo "$DEPLOYED_IMAGE"
 
           if [[ "$DEPLOYED_IMAGE" != "$EXPECTED_IMAGE" ]]; then
             echo "ERROR: Production deployment does not reference approved digest."
             exit 1
           fi
-
-          echo "Production deployment identity verified."
 
       #################################################
       # Store Release History
@@ -448,6 +446,7 @@ jobs:
           cat <<EOF > "release-history/${SERVICE}-${VERSION}.json"
           {
             "release_id": "${RELEASE_ID}",
+            "release_run_id": "${RELEASE_RUN_ID}",
             "service": "${SERVICE}",
             "version": "${VERSION}",
             "image_tag": "${IMAGE_TAG}",
@@ -491,7 +490,6 @@ jobs:
       #################################################
 
       - name: Production Deployment Summary
-        shell: bash
         run: |
 
           echo ""
@@ -501,6 +499,9 @@ jobs:
           echo ""
           echo "Release ID:"
           echo "$RELEASE_ID"
+          echo ""
+          echo "Release Run ID:"
+          echo "$RELEASE_RUN_ID"
           echo ""
           echo "Service:"
           echo "$SERVICE"
@@ -516,9 +517,6 @@ jobs:
           echo ""
           echo "Immutable Digest:"
           echo "$DIGEST"
-          echo ""
-          echo "Environment:"
-          echo "production"
           echo ""
           echo "Approved By:"
           echo "${{ github.actor }}"
