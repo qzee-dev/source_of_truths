@@ -1,0 +1,173 @@
+name: Deploy Staging
+
+on:
+  workflow_dispatch:
+
+    inputs:
+
+      service:
+        description: Service To Deploy
+        required: true
+        type: choice
+        options:
+          - api-gateway
+          - user-service
+          - payment-service
+          - wallet-service
+          - transaction-service
+          - notification-service
+          - fraud-service
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+
+  deploy:
+
+    name: Deploy And Test Staging
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: staging
+
+    steps:
+
+      #################################################
+      # Checkout
+      #################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      #################################################
+      # Download Release Metadata
+      #################################################
+
+      - name: Download Release Metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-data
+          path: release
+
+      #################################################
+      # AWS Credentials
+      #################################################
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      #################################################
+      # Configure Kubectl
+      #################################################
+
+      - name: Configure Kubectl
+        run: |
+
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name fintech-staging
+
+      #################################################
+      # Read Release Metadata
+      #################################################
+
+      - name: Read Release Metadata
+        run: |
+
+          SERVICE=$(cat release/service.txt)
+          VERSION=$(cat release/version.txt)
+          IMAGE_TAG=$(cat release/image-tag.txt)
+          DIGEST=$(cat release/digest.txt)
+
+          echo "SERVICE=$SERVICE" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "DIGEST=$DIGEST" >> $GITHUB_ENV
+
+          echo "Deploying:"
+          echo "Service: $SERVICE"
+          echo "Version: $VERSION"
+          echo "Image Tag: $IMAGE_TAG"
+          echo "Digest: $DIGEST"
+
+      #################################################
+      # Validate Selected Service
+      #################################################
+
+      - name: Validate Selected Service
+        run: |
+
+          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
+            echo "Service mismatch"
+            exit 1
+          fi
+
+      #################################################
+      # Deploy Exact Digest
+      #################################################
+
+      - name: Deploy To Staging
+        run: |
+
+          helm upgrade fintech ./helm \
+            --install \
+            --namespace staging \
+            --set image.repository=$SERVICE \
+            --set image.digest=$DIGEST
+
+      #################################################
+      # Verify Rollout
+      #################################################
+
+      - name: Verify Rollout
+        run: |
+
+          kubectl rollout status \
+            deployment/$SERVICE \
+            -n staging
+
+      #################################################
+      # Smoke Tests
+      #################################################
+
+      - name: Smoke Tests
+        run: ./tests/smoke.sh
+
+      #################################################
+      # Integration Tests
+      #################################################
+
+      - name: Integration Tests
+        run: ./tests/integration.sh
+
+      #################################################
+      # DAST
+      #################################################
+
+      - name: DAST
+        run: ./tests/dast.sh
+
+      #################################################
+      # Deployment Summary
+      #################################################
+
+      - name: Staging Deployment Summary
+        run: |
+
+          echo "======================================"
+          echo "STAGING DEPLOYMENT SUCCESSFUL"
+          echo "======================================"
+          echo "Service : $SERVICE"
+          echo "Version : $VERSION"
+          echo "Tag     : $IMAGE_TAG"
+          echo "Digest  : $DIGEST"
+          echo "======================================"
