@@ -2,11 +2,15 @@ name: Deploy Production
 
 on:
   workflow_dispatch:
-
     inputs:
 
+      release_id:
+        description: Release ID From Release Workflow
+        required: true
+        type: string
+
       service:
-        description: Service To Release
+        description: Service To Deploy
         required: true
         type: choice
         options:
@@ -19,13 +23,18 @@ on:
           - fraud-service
 
       version:
-        description: Approved Version
+        description: Approved Release Version
         required: true
         type: string
 
 permissions:
   contents: write
   id-token: write
+  actions: read
+
+concurrency:
+  group: production-${{ inputs.service }}
+  cancel-in-progress: false
 
 env:
   AWS_REGION: us-east-1
@@ -49,6 +58,8 @@ jobs:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       #################################################
       # Download Release Metadata
@@ -57,11 +68,12 @@ jobs:
       - name: Download Release Metadata
         uses: actions/download-artifact@v4
         with:
-          name: release-data
+          name: release-${{ inputs.release_id }}
           path: release
+          github-token: ${{ github.token }}
 
       #################################################
-      # AWS Credentials
+      # AWS Authentication
       #################################################
 
       - name: Configure AWS Credentials
@@ -75,88 +87,289 @@ jobs:
       #################################################
 
       - name: Read Release Metadata
+        shell: bash
         run: |
+
+          set -euo pipefail
 
           SERVICE=$(cat release/service.txt)
-          RELEASE_VERSION=$(cat release/version.txt)
+          VERSION=$(cat release/version.txt)
           IMAGE_TAG=$(cat release/image-tag.txt)
           DIGEST=$(cat release/digest.txt)
+          COMMIT=$(cat release/commit.txt)
+          RELEASE_ID=$(cat release/release-id.txt)
 
-          echo "SERVICE=$SERVICE" >> $GITHUB_ENV
-          echo "RELEASE_VERSION=$RELEASE_VERSION" >> $GITHUB_ENV
-          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
-          echo "DIGEST=$DIGEST" >> $GITHUB_ENV
+          echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
+          echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+
+          echo "======================================"
+          echo "Release Metadata"
+          echo "======================================"
+          echo "Release ID : $RELEASE_ID"
+          echo "Service    : $SERVICE"
+          echo "Version    : $VERSION"
+          echo "Image Tag  : $IMAGE_TAG"
+          echo "Commit     : $COMMIT"
+          echo "Digest     : $DIGEST"
+          echo "======================================"
 
       #################################################
-      # Validate Release
+      # Validate Release Identity
       #################################################
 
-      - name: Validate Release
+      - name: Validate Release Identity
+        shell: bash
         run: |
 
-          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
-            echo "Service mismatch"
+          set -euo pipefail
+
+          if [[ "$RELEASE_ID" != "${{ inputs.release_id }}" ]]; then
+            echo "ERROR: Release ID mismatch."
+            echo "Expected: ${{ inputs.release_id }}"
+            echo "Actual  : $RELEASE_ID"
             exit 1
           fi
 
-          if [[ "$RELEASE_VERSION" != "${{ inputs.version }}" ]]; then
-            echo "Version mismatch"
+          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
+            echo "ERROR: Service mismatch."
+            echo "Expected: ${{ inputs.service }}"
+            echo "Actual  : $SERVICE"
+            exit 1
+          fi
+
+          if [[ "$VERSION" != "${{ inputs.version }}" ]]; then
+            echo "ERROR: Version mismatch."
+            echo "Expected: ${{ inputs.version }}"
+            echo "Actual  : $VERSION"
+            exit 1
+          fi
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid release version."
+            exit 1
+          fi
+
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "ERROR: Invalid image digest."
+            exit 1
+          fi
+
+          echo "Release identity validated."
+
+      #################################################
+      # Verify Source Commit
+      #################################################
+
+      - name: Verify Source Commit
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          git cat-file -e "$COMMIT^{commit}"
+
+          echo "Source commit verified:"
+          echo "$COMMIT"
+
+      #################################################
+      # Verify ECR Repository
+      #################################################
+
+      - name: Verify ECR Repository
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          aws ecr describe-repositories \
+            --repository-names "$SERVICE" \
+            --region "$AWS_REGION" \
+            > /dev/null
+
+          echo "ECR repository verified:"
+          echo "$SERVICE"
+
+      #################################################
+      # Verify ECR Tag Immutability
+      #################################################
+
+      - name: Verify ECR Tag Immutability
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          MUTABILITY=$(aws ecr describe-repositories \
+            --repository-names "$SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'repositories[0].imageTagMutability' \
+            --output text)
+
+          echo "ECR tag mutability: $MUTABILITY"
+
+          if [[ "$MUTABILITY" != "IMMUTABLE" ]]; then
+            echo "ERROR: ECR repository must use IMMUTABLE image tags."
             exit 1
           fi
 
       #################################################
-      # Retag Same Immutable Digest
+      # Verify Exact Digest Exists
+      #################################################
+
+      - name: Verify ECR Digest
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          VERIFIED_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageDigest="$DIGEST" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ -z "$VERIFIED_DIGEST" || "$VERIFIED_DIGEST" == "None" ]]; then
+            echo "ERROR: Release digest does not exist in ECR."
+            echo "$SERVICE@$DIGEST"
+            exit 1
+          fi
+
+          if [[ "$VERIFIED_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: Digest mismatch."
+            echo "Expected: $DIGEST"
+            echo "Actual  : $VERIFIED_DIGEST"
+            exit 1
+          fi
+
+          echo "Exact release digest verified:"
+          echo "$SERVICE@$DIGEST"
+
+      #################################################
+      # Verify Build Tag
+      #################################################
+
+      - name: Verify Build Tag
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          TAG_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ "$TAG_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: Build tag does not point to release digest."
+            echo "Build tag digest : $TAG_DIGEST"
+            echo "Release digest   : $DIGEST"
+            exit 1
+          fi
+
+          echo "Build tag verified:"
+          echo "$SERVICE:$IMAGE_TAG"
+
+      #################################################
+      # Create Human-Readable Production Tag
       #################################################
 
       - name: Create Production Release Tag
+        shell: bash
         run: |
+
+          set -euo pipefail
+
+          EXISTING_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageTag="$VERSION" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null || true)
+
+          if [[ -n "$EXISTING_DIGEST" && "$EXISTING_DIGEST" != "None" ]]; then
+
+            if [[ "$EXISTING_DIGEST" != "$DIGEST" ]]; then
+              echo "ERROR: Production version already points to another digest."
+              echo "Version: $VERSION"
+              echo "Existing digest: $EXISTING_DIGEST"
+              echo "Release digest : $DIGEST"
+              exit 1
+            fi
+
+            echo "Production version already points to the correct digest."
+            echo "No tag mutation required."
+
+            exit 0
+          fi
 
           MANIFEST=$(aws ecr batch-get-image \
             --repository-name "$SERVICE" \
             --image-ids imageDigest="$DIGEST" \
-            --query 'images[].imageManifest' \
+            --region "$AWS_REGION" \
+            --query 'images[0].imageManifest' \
             --output text)
 
           if [[ -z "$MANIFEST" || "$MANIFEST" == "None" ]]; then
-            echo "Image digest not found in ECR"
+            echo "ERROR: Unable to retrieve image manifest."
             exit 1
           fi
 
           aws ecr put-image \
             --repository-name "$SERVICE" \
-            --image-tag "$RELEASE_VERSION" \
-            --image-manifest "$MANIFEST"
+            --image-tag "$VERSION" \
+            --image-manifest "$MANIFEST" \
+            --region "$AWS_REGION"
+
+          echo "Production release tag created:"
+          echo "$SERVICE:$VERSION"
 
       #################################################
-      # Release History
+      # Verify Production Tag
       #################################################
 
-      - name: Store Release History
+      - name: Verify Production Tag
+        shell: bash
         run: |
 
-          mkdir -p release-history
+          set -euo pipefail
 
-          cat <<EOF > release-history/${SERVICE}-${RELEASE_VERSION}.json
-          {
-            "service":"${SERVICE}",
-            "version":"${RELEASE_VERSION}",
-            "image_tag":"${IMAGE_TAG}",
-            "digest":"${DIGEST}",
-            "commit":"${GITHUB_SHA}",
-            "environment":"production",
-            "date":"$(date -u +%FT%TZ)"
-          }
-          EOF
+          PRODUCTION_DIGEST=$(aws ecr describe-images \
+            --repository-name "$SERVICE" \
+            --image-ids imageTag="$VERSION" \
+            --region "$AWS_REGION" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [[ "$PRODUCTION_DIGEST" != "$DIGEST" ]]; then
+            echo "ERROR: Production tag does not point to approved digest."
+            echo "Production tag : $PRODUCTION_DIGEST"
+            echo "Approved digest: $DIGEST"
+            exit 1
+          fi
+
+          echo "Production tag verified."
+          echo "$SERVICE:$VERSION"
+          echo "$SERVICE@$DIGEST"
 
       #################################################
       # Configure Kubectl
       #################################################
 
       - name: Configure Kubectl
+        shell: bash
         run: |
 
+          set -euo pipefail
+
           aws eks update-kubeconfig \
-            --region ${{ env.AWS_REGION }} \
+            --region "$AWS_REGION" \
             --name fintech-production
 
       #################################################
@@ -164,40 +377,112 @@ jobs:
       #################################################
 
       - name: Deploy To Production
+        shell: bash
         run: |
+
+          set -euo pipefail
 
           helm upgrade fintech ./helm \
             --install \
             --namespace production \
-            --set image.repository=$SERVICE \
-            --set image.digest=$DIGEST
+            --create-namespace \
+            --set image.repository="$SERVICE" \
+            --set image.digest="$DIGEST"
 
       #################################################
       # Verify Production Rollout
       #################################################
 
       - name: Verify Rollout
+        shell: bash
         run: |
 
+          set -euo pipefail
+
           kubectl rollout status \
-            deployment/$SERVICE \
-            -n production
+            deployment/"$SERVICE" \
+            --namespace production \
+            --timeout=10m
+
+      #################################################
+      # Verify Production Deployment Identity
+      #################################################
+
+      - name: Verify Deployed Digest
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          EXPECTED_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE}@${DIGEST}"
+
+          DEPLOYED_IMAGE=$(kubectl get deployment "$SERVICE" \
+            --namespace production \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+          echo "Expected image:"
+          echo "$EXPECTED_IMAGE"
+
+          echo "Deployed image:"
+          echo "$DEPLOYED_IMAGE"
+
+          if [[ "$DEPLOYED_IMAGE" != "$EXPECTED_IMAGE" ]]; then
+            echo "ERROR: Production deployment does not reference approved digest."
+            exit 1
+          fi
+
+          echo "Production deployment identity verified."
+
+      #################################################
+      # Store Release History
+      #################################################
+
+      - name: Store Release History
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          mkdir -p release-history
+
+          cat <<EOF > "release-history/${SERVICE}-${VERSION}.json"
+          {
+            "release_id": "${RELEASE_ID}",
+            "service": "${SERVICE}",
+            "version": "${VERSION}",
+            "image_tag": "${IMAGE_TAG}",
+            "digest": "${DIGEST}",
+            "commit": "${COMMIT}",
+            "environment": "production",
+            "approved_by": "${{ github.actor }}",
+            "production_workflow_run_id": "${GITHUB_RUN_ID}",
+            "production_workflow_run_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}",
+            "deployed_at": "$(date -u +%FT%TZ)"
+          }
+          EOF
 
       #################################################
       # Commit Release History
       #################################################
 
       - name: Commit Release Metadata
+        shell: bash
         run: |
 
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          set -euo pipefail
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
 
           git add release-history
 
+          if git diff --cached --quiet; then
+            echo "No release history changes to commit."
+            exit 0
+          fi
+
           git commit \
-            -m "release $SERVICE $RELEASE_VERSION" \
-            || true
+            -m "release ${SERVICE} ${VERSION}"
 
           git push
 
@@ -206,13 +491,40 @@ jobs:
       #################################################
 
       - name: Production Deployment Summary
+        shell: bash
         run: |
 
-          echo "======================================"
+          echo ""
+          echo "=============================================="
           echo "PRODUCTION DEPLOYMENT SUCCESSFUL"
-          echo "======================================"
-          echo "Service : $SERVICE"
-          echo "Version : $RELEASE_VERSION"
-          echo "Tag     : $IMAGE_TAG"
-          echo "Digest  : $DIGEST"
-          echo "======================================"
+          echo "=============================================="
+          echo ""
+          echo "Release ID:"
+          echo "$RELEASE_ID"
+          echo ""
+          echo "Service:"
+          echo "$SERVICE"
+          echo ""
+          echo "Human Version:"
+          echo "$VERSION"
+          echo ""
+          echo "Build Tag:"
+          echo "$IMAGE_TAG"
+          echo ""
+          echo "Source Commit:"
+          echo "$COMMIT"
+          echo ""
+          echo "Immutable Digest:"
+          echo "$DIGEST"
+          echo ""
+          echo "Environment:"
+          echo "production"
+          echo ""
+          echo "Approved By:"
+          echo "${{ github.actor }}"
+          echo ""
+          echo "=============================================="
+          echo "BUILD ONCE"
+          echo "PROMOTE SAME DIGEST"
+          echo "NO REBUILD"
+          echo "=============================================="
