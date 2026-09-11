@@ -1,0 +1,6 @@
+add repository: [helm repo add bitnami https://charts.bitnami.com/bitnami]
+     helm repo list
+     helm search repo bitnami | grep -i nginx
+     helm search repo bitnami | grep -i aws cli
+     helm search repo bitnami | grep -i aws 
+     clear
