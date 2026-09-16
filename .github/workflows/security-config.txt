@@ -1,0 +1,1455 @@
+=============================
+Best Practice structure
+==============================
+.github/workflows
+
+release.yml
+
+security-scheduled.yml
+security-notification.yml
+
+codeql.yml
+codeql-notification.yml
+
+dependabot-notification.yml
+
+security/
+├── sca-trivy.yml
+├── gitleaks.yml
+├── sonar.yml
+└── security-gate.yml
+
+
+==============================
+1. security-scheduled.yml
+==============================
+
+name: Security - Scheduled
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  trivy-sca:
+    name: Trivy Dependency Scan
+    uses: ./.github/workflows/sca-trivy.yml
+
+  notify-status:
+
+    name: Security Summary
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - trivy-sca
+
+    if: always()
+
+    steps:
+
+      - name: Security Scan Completed
+        run: |
+          echo "Security workflow completed"
+
+====================================================================================================================
+2. sca-trivy.yml
+===========================================
+name: Security - SCA
+
+on:
+
+  workflow_call:
+
+  pull_request:
+    branches:
+      - develop
+      - main
+
+  push:
+    branches:
+      - develop
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+
+  trivy-sca:
+
+    name: Trivy Dependency Scan
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Trivy
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-${{ runner.os }}
+
+      - name: Run Trivy Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: json
+          output: trivy-results.json
+          exit-code: '1'
+
+      - name: Upload Trivy Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.json
+
+  pnpm-audit:
+
+    name: pnpm Dependency Audit
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Audit
+        run: |
+          pnpm audit --json > pnpm-audit.json
+
+      - name: Upload pnpm Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-audit-report
+          path: pnpm-audit.json
+
+===========================================================================================
+3. security-notification.yml
+============================================================================================
+name: Security - Notification
+
+on:
+
+  workflow_run:
+    workflows:
+      - Security - Scheduled
+
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+
+  notify-security-team:
+
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Trivy Report
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: security-scheduled.yml
+          workflow_conclusion: failure
+          name: trivy-results
+          path: reports
+
+      - name: Extract Findings
+        id: findings
+        run: |
+
+          CRITICAL=$(jq '[.. | .Severity? | select(.=="CRITICAL")] | length' reports/trivy-results.json)
+
+          HIGH=$(jq '[.. | .Severity? | select(.=="HIGH")] | length' reports/trivy-results.json)
+
+          PACKAGES=$(jq -r '
+          ..
+          | .PkgName?
+          | select(. != null)
+          ' reports/trivy-results.json | sort -u | head -10)
+
+          {
+            echo "critical=${CRITICAL}"
+            echo "high=${HIGH}"
+
+            echo "packages<<EOF"
+            echo "$PACKAGES"
+            echo "EOF"
+
+          } >> $GITHUB_OUTPUT
+
+      - name: Send Slack Alert
+
+        env:
+
+          WEBHOOK: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+
+          CRITICAL_COUNT: ${{ steps.findings.outputs.critical }}
+
+          HIGH_COUNT: ${{ steps.findings.outputs.high }}
+
+          PACKAGES: ${{ steps.findings.outputs.packages }}
+
+          REPOSITORY: ${{ github.repository }}
+
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+
+          WORKFLOW_URL: ${{ github.event.workflow_run.html_url }}
+
+        run: |
+
+          curl -X POST \
+          -H "Content-Type: application/json" \
+          --data "{
+
+            \"text\":\"Security Findings Detected\",
+
+            \"blocks\": [
+
+              {
+                \"type\":\"header\",
+                \"text\":{
+                  \"type\":\"plain_text\",
+                  \"text\":\"🚨 Security Vulnerabilities Detected\"
+                }
+              },
+
+              {
+                \"type\":\"section\",
+                \"fields\": [
+
+                  {
+                    \"type\":\"mrkdwn\",
+                    \"text\":\"*Repository:*\\n${REPOSITORY}\"
+                  },
+
+                  {
+                    \"type\":\"mrkdwn\",
+                    \"text\":\"*Branch:*\\n${BRANCH}\"
+                  },
+
+                  {
+                    \"type\":\"mrkdwn\",
+                    \"text\":\"*Critical:*\\n${CRITICAL_COUNT}\"
+                  },
+
+                  {
+                    \"type\":\"mrkdwn\",
+                    \"text\":\"*High:*\\n${HIGH_COUNT}\"
+                  }
+
+                ]
+              },
+
+              {
+                \"type\":\"section\",
+                \"text\":{
+                  \"type\":\"mrkdwn\",
+                  \"text\":\"*Affected Packages:*\\n${PACKAGES}\"
+                }
+              },
+
+              {
+                \"type\":\"actions\",
+                \"elements\":[
+
+                  {
+                    \"type\":\"button\",
+                    \"text\":{
+                      \"type\":\"plain_text\",
+                      \"text\":\"View Findings\"
+                    },
+                    \"url\":\"${WORKFLOW_URL}\"
+                  }
+
+                ]
+              }
+
+            ]
+
+          }" \
+          "$WEBHOOK"
+
+
+
+
+========================================================================================
+security-scheduled.yml becomes the orchestrator, sca-trivy.yml becomes the reusable scanner, and security-notification.yml becomes the reporting layer. This separation is cleaner, easier to maintain, and scales well when you later add Gitleaks, CodeQL, Semgrep, or other security tools.
+
+=====================================
+jobs:
+  sca:
+    uses: ./.github/workflows/sca-trivy.yml
+
+  secret:
+    uses: ./.github/workflows/secret-scan.yml
+
+  codeql:
+    uses: ./.github/workflows/codeql.yml
+
+
+===========================================================
+.github/workflows/codeql.yml
+
+the problem codeQl is here to solve:
+1. SQL Injection
+2. Cross-Site Scripting (XSS)
+3. Server-Side Request Forgery (SSRF)
+4. Command Injection
+5. Path Traversal
+6. Hardcoded Credentials
+7. Authentication Flaws
+8. Authorization Flaws
+9. Insecure Deserialization
+10. Sensitive Data Exposure
+11. Weak Cryptography
+12. Unsafe Redirects
+
+`=========================================================
+name: Security - CodeQL
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+
+    name: CodeQL Analysis
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        language:
+          - javascript-typescript
+
+    steps:
+
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Application
+        run: pnpm build
+
+      - name: Run CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+
+===================================================
+Tool	Main Problem Solved	OwnerCodeQL	Insecure Application Code	Developers
+SonarQube	Code Quality + Bugs	Developers
+Dependabot	Vulnerable Dependencies	DevOps + Developers
+Trivy SCA	Dependency Vulnerabilities	DevOps + Developers
+Gitleaks	Secret Exposure	Security / DevOps
+Terraform Scan	Infrastructure Misconfigurations	DevOps
+=================================================================
+================================
+FOR TRIVY IMAGE SCAN
+
+Yes. Trivy FS:Trivy FS (Filesystem Scan) and Trivy Image Scan are related, but they scan different things.
+
+Trivy FS (Filesystem Scan):Scans your repository contents before a Docker image is built
+example:
+package.json
+pnpm-lock.yaml
+pom.xml
+build.gradle
+requirements.txt
+go.mod
+
+Trivy Image:
+=
+"Is my final Docker image vulnerable?"
+
+Ubuntu packages
+Alpine packages
+OpenSSL
+Java runtime
+Node runtime
+Operating system libraries
+
+=========================
+Design my pipeline for this policy:
+Critical = Fail
+High     = Fail
+Medium   = Warn
+Low      = Report Only
+=======================================================
+release-image-security.yml
+=========================================================
+name: Release Container Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  build-and-scan:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
+          aws-region: eu-west-1
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ==========================================
+      # BUILD IMAGE
+      # ==========================================
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t fintech-api:${{ github.sha }} \
+            .
+
+    # ==========================================
+# TRIVY IMAGE SCAN
+# ==========================================
+
+- name: Scan Docker Image
+  uses: aquasecurity/trivy-action@master
+  with:
+    image-ref: fintech-api:${{ github.sha }}
+    format: json
+    output: trivy-image-results.json
+    severity: CRITICAL,HIGH,MEDIUM,LOW
+    ignore-unfixed: true
+    exit-code: '0'
+
+# ==========================================
+# EVALUATE SECURITY POLICY
+# ==========================================
+
+- name: Evaluate Security Policy
+  id: security-gate
+  shell: bash
+  run: |
+
+    CRITICAL=$(jq '[.. | .Severity? | select(.=="CRITICAL")] | length' trivy-image-results.json)
+    HIGH=$(jq '[.. | .Severity? | select(.=="HIGH")] | length' trivy-image-results.json)
+    MEDIUM=$(jq '[.. | .Severity? | select(.=="MEDIUM")] | length' trivy-image-results.json)
+    LOW=$(jq '[.. | .Severity? | select(.=="LOW")] | length' trivy-image-results.json)
+
+    STATUS="PASS"
+    ALERT_TYPE="NONE"
+
+    if [ "$CRITICAL" -gt 0 ]; then
+      STATUS="FAIL"
+      ALERT_TYPE="TRIVY-IMAGE-CRITICAL"
+    elif [ "$HIGH" -gt 0 ]; then
+      STATUS="FAIL"
+      ALERT_TYPE="TRIVY-IMAGE-HIGH"
+    elif [ "$MEDIUM" -gt 0 ]; then
+      STATUS="WARN"
+      ALERT_TYPE="TRIVY-IMAGE-MEDIUM"
+    fi
+
+    echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+    echo "high=$HIGH" >> $GITHUB_OUTPUT
+    echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+    echo "low=$LOW" >> $GITHUB_OUTPUT
+
+    echo "status=$STATUS" >> $GITHUB_OUTPUT
+    echo "alert_type=$ALERT_TYPE" >> $GITHUB_OUTPUT
+
+# ==========================================
+# SEND SLACK ALERT
+# ==========================================
+
+- name: Send Security Alert
+  if: |
+    steps.security-gate.outputs.status == 'FAIL' ||
+    steps.security-gate.outputs.status == 'WARN'
+
+  env:
+    WEBHOOK: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+
+    STATUS: ${{ steps.security-gate.outputs.status }}
+    ALERT_TYPE: ${{ steps.security-gate.outputs.alert_type }}
+
+    CRITICAL: ${{ steps.security-gate.outputs.critical }}
+    HIGH: ${{ steps.security-gate.outputs.high }}
+    MEDIUM: ${{ steps.security-gate.outputs.medium }}
+    LOW: ${{ steps.security-gate.outputs.low }}
+
+    REPOSITORY: ${{ github.repository }}
+
+  run: |
+
+    curl -X POST \
+      -H "Content-Type: application/json" \
+      --data "{
+
+        \"text\":\"[TRIVY-IMAGE] Security Findings Detected\",
+
+        \"blocks\": [
+
+          {
+            \"type\":\"header\",
+            \"text\":{
+              \"type\":\"plain_text\",
+              \"text\":\"🚨 [TRIVY-IMAGE] Container Image Scan\"
+            }
+          },
+
+          {
+            \"type\":\"section\",
+            \"fields\": [
+
+              {
+                \"type\":\"mrkdwn\",
+                \"text\":\"*Repository:*\\n${REPOSITORY}\"
+              },
+
+              {
+                \"type\":\"mrkdwn\",
+                \"text\":\"*Status:*\\n${STATUS}\"
+              },
+
+              {
+                \"type\":\"mrkdwn\",
+                \"text\":\"*Critical:*\\n${CRITICAL}\"
+              },
+
+              {
+                \"type\":\"mrkdwn\",
+                \"text\":\"*High:*\\n${HIGH}\"
+              },
+
+              {
+                \"type\":\"mrkdwn\",
+                \"text\":\"*Medium:*\\n${MEDIUM}\"
+              },
+
+              {
+                \"type\":\"mrkdwn\",
+                \"text\":\"*Low:*\\n${LOW}\"
+              }
+
+            ]
+          }
+
+        ]
+
+      }" \
+      "$WEBHOOK"
+
+# ==========================================
+# FAIL SECURITY GATE
+# ==========================================
+
+- name: Enforce Security Policy
+  if: steps.security-gate.outputs.status == 'FAIL'
+  run: |
+    echo "Critical or High vulnerabilities detected."
+    exit 1
+      # ==========================================
+      # TAG IMAGE
+      # ==========================================
+
+      - name: Tag Image
+        run: |
+          docker tag \
+            fintech-api:${{ github.sha }} \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+
+      # ==========================================
+      # PUSH IMAGE
+      # ==========================================
+
+      - name: Push Image
+        run: |
+          docker push \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}     
+      # PUSH ONLY IF SECURITY GATE PASSES
+      # ==========================================
+
+      - name: Tag Image
+        run: |
+          docker tag \
+            fintech-api:${{ github.sha }} \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Push Image
+        run: |
+          docker push \
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+
+
+
+
+
+=======================================================================
+.github/
+├── dependabot.yml
+└── workflows/
+    └── dependabot-notification.yml
+=======================================
+Production-Ready dependabot.yml
+====================================
+version: 2
+
+updates:
+
+  # ==========================================================
+  # NPM / PNPM DEPENDENCIES
+  # ==========================================================
+
+  - package-ecosystem: "npm"
+    directory: "/"
+
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Africa/Lagos"
+
+    open-pull-requests-limit: 5
+
+    labels:
+      - "security:automated"
+      - "scanner:sca"
+      - "type:dependency"
+
+    commit-message:
+      prefix: "deps"
+
+    reviewers:
+      - "Coreinfra-Labs/security"
+
+    # --------------------------------------------------------
+    # BLOCK MAJOR VERSION UPDATES
+    # --------------------------------------------------------
+
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+    # --------------------------------------------------------
+    # GROUP RELATED PACKAGES
+    # --------------------------------------------------------
+
+    groups:
+
+      nx:
+        patterns:
+          - "@nx/*"
+          - "nx"
+
+      angular:
+        patterns:
+          - "@angular/*"
+
+      react:
+        patterns:
+          - "react"
+          - "react-*"
+          - "@types/react*"
+
+      typescript:
+        patterns:
+          - "typescript"
+          - "@types/node"
+
+      testing:
+        patterns:
+          - "jest"
+          - "@jest/*"
+          - "vitest"
+          - "@playwright/*"
+          - "playwright"
+
+      eslint:
+        patterns:
+          - "eslint"
+          - "@eslint/*"
+          - "typescript-eslint"
+          - "@typescript-eslint/*"
+
+  # ==========================================================
+  # GITHUB ACTIONS
+  # ==========================================================
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:30"
+      timezone: "Africa/Lagos"
+
+    open-pull-requests-limit: 5
+
+    labels:
+      - "security:automated"
+      - "scanner:sca"
+      - "type:dependency"
+
+    commit-message:
+      prefix: "ci"
+
+    reviewers:
+      - "Coreinfra-Labs/devsecops"
+
+    # --------------------------------------------------------
+    # BLOCK MAJOR ACTION CHANGES
+    # --------------------------------------------------------
+
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+   
+
+    groups:
+
+      github-actions:
+        patterns:
+          - "*"
+=================================================
+Adding a monthly major-update review workflow
+Create:
+.github/workflows/dependabot-major-review.yml
+This workflow will run on the first day of every month and look for outdated npm dependencies where a newer major version exists.
+
+########################################################
+what you will see in slack 
+
+This doesn't create PRs
+
+It's simply your monthly reminder:
+"These dependencies have major versions available. Decide which ones you want to investigate."
+
+📋 Monthly Major Dependency Review
+
+Repository: company/my-app
+Major updates available: 3
+
+• react 18.3.1 → 19.1.0
+  Compatible version: 18.3.1
+
+• eslint 8.57.0 → 9.35.0
+  Compatible version: 8.57.0
+
+• playwright 1.52.0 → 2.0.0
+  Compatible version: 1.52.0
+
+🔎 Action: Review these major updates manually.
+
+
+
+########################################################
+------------------------------------------------------
+name: Dependabot Major Version Review
+
+on:
+  schedule:
+    # First day of every month at 09:00 UTC
+    - cron: "0 9 1 * *"
+
+  # Allow manual execution
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  major-review:
+    name: Review Major Dependency Updates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check for major dependency updates
+        id: outdated
+        run: |
+          set -euo pipefail
+
+          npm install --package-lock-only --ignore-scripts
+
+          npm outdated --json > outdated.json || true
+
+          cat outdated.json
+
+      - name: Send major update report to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          python <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          try:
+              with open("outdated.json", "r", encoding="utf-8") as f:
+                  outdated = json.load(f)
+          except (FileNotFoundError, json.JSONDecodeError):
+              outdated = {}
+
+          major_updates = []
+
+          for name, info in outdated.items():
+              current = info.get("current")
+              wanted = info.get("wanted")
+              latest = info.get("latest")
+
+              if not current or not latest:
+                  continue
+
+              def major(version):
+                  try:
+                      version = version.lstrip("v")
+                      return int(version.split(".")[0])
+                  except (ValueError, IndexError):
+                      return None
+
+              current_major = major(current)
+              latest_major = major(latest)
+
+              if (
+                  current_major is not None
+                  and latest_major is not None
+                  and latest_major > current_major
+              ):
+                  major_updates.append({
+                      "name": name,
+                      "current": current,
+                      "wanted": wanted,
+                      "latest": latest
+                  })
+
+          if not major_updates:
+              print("No major dependency updates found.")
+              raise SystemExit(0)
+
+          lines = [
+              "📋 *Monthly Major Dependency Review*",
+              "",
+              f"*Repository:* {os.environ['GITHUB_REPOSITORY']}",
+              f"*Major updates available:* {len(major_updates)}",
+              ""
+          ]
+
+          for item in major_updates:
+              lines.append(
+                  f"• *{item['name']}* "
+                  f"`{item['current']}` → `{item['latest']}`"
+              )
+
+              if item["wanted"]:
+                  lines.append(
+                      f"  Compatible version: `{item['wanted']}`"
+                  )
+
+              lines.append("")
+
+          lines.extend([
+              "🔎 *Action:* Review these major updates manually.",
+              "",
+              f"<{os.environ['GITHUB_SERVER_URL']}/"
+              f"{os.environ['GITHUB_REPOSITORY']}/"
+              f"actions/runs/{os.environ['GITHUB_RUN_ID']}|"
+              "View workflow>"
+          ])
+
+          payload = json.dumps({
+              "text": "\n".join(lines)
+          }).encode("utf-8")
+
+          request = urllib.request.Request(
+              os.environ["SLACK_WEBHOOK_URL"],
+              data=payload,
+              headers={
+                  "Content-Type": "application/json"
+              },
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request) as response:
+              if response.status < 200 or response.status >= 300:
+                  raise RuntimeError(
+                      f"Slack returned HTTP {response.status}"
+                  )
+
+          print(
+              f"Sent report containing "
+              f"{len(major_updates)} major update(s)."
+          )
+          PY
+
+
+===============================================
+==========================================
+.github/workflows/dependabot-notification.yml
+=================================================
+name: Dependabot Notification
+
+on:
+  pull_request:
+    types:
+      - opened
+
+permissions:
+  pull-requests: read
+
+jobs:
+
+  notify:
+
+    if: github.actor == 'dependabot[bot]'
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Send Slack Notification
+        env:
+          WEBHOOK: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+          REPOSITORY: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR: ${{ github.actor }}
+
+        run: |
+          curl -X POST \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n \
+              --arg repo "$REPOSITORY" \
+              --arg author "$AUTHOR" \
+              --arg title "$PR_TITLE" \
+              --arg url "$PR_URL" \
+              '{
+                text: "📦 [DEPENDABOT] Dependency Update Created",
+                blocks: [
+                  {
+                    type: "header",
+                    text: {
+                      type: "plain_text",
+                      text: "📦 [DEPENDABOT] Dependency Update Created"
+                    }
+                  },
+                  {
+                    type: "section",
+                    fields: [
+                      {
+                        type: "mrkdwn",
+                        text: ("*Alert Type:*\nDEPENDABOT")
+                      },
+                      {
+                        type: "mrkdwn",
+                        text: ("*Repository:*\n" + $repo)
+                      },
+                      {
+                        type: "mrkdwn",
+                        text: ("*Created By:*\n" + $author)
+                      }
+                    ]
+                  },
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: ("*Pull Request:*\n" + $title)
+                    }
+                  },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        text: {
+                          type: "plain_text",
+                          text: "View PR"
+                        },
+                        url: $url
+                      }
+                    ]
+                  }
+                ]
+              }')" \
+            "$WEBHOOK"
+
+
+==============================================
+=============================================
+depndabot-security-notification.yaml
+============================================
+name: Dependabot Security Notification
+
+on:
+  schedule:
+    # Run every hour
+    - cron: "0 * * * *"
+
+  # Allow manual execution from GitHub Actions
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  vulnerability-alerts: read
+  actions: read
+
+concurrency:
+  group: dependabot-security-notification
+  cancel-in-progress: false
+
+jobs:
+  security-alerts:
+    name: Check Dependabot Security Alerts
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------------------------------------------------------
+      # 1. Find the previous successful run
+      # ---------------------------------------------------------
+      - name: Find previous successful run
+        id: previous-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/dependabot-security-notification.yml/runs?status=success&per_page=2"
+
+          curl --fail-with-body \
+            --silent \
+            --show-error \
+            --request GET \
+            --url "$API_URL" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output workflow-runs.json
+
+          python <<'PY'
+          import json
+          import os
+
+          with open("workflow-runs.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          runs = data.get("workflow_runs", [])
+
+          # The current run is not successful yet, so the first
+          # successful run should normally be the previous run.
+          if not runs:
+              print("No previous successful run found.")
+              print("This is the first run.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("first_run=true\n")
+                  output.write("previous_run_time=\n")
+          else:
+              previous = runs[0]
+
+              created_at = previous["created_at"]
+
+              print(f"Previous successful run: {previous['id']}")
+              print(f"Previous run started: {created_at}")
+
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("first_run=false\n")
+                  output.write(f"previous_run_time={created_at}\n")
+          PY
+
+      # ---------------------------------------------------------
+      # 2. Get Dependabot alerts
+      # ---------------------------------------------------------
+      - name: Fetch Dependabot alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_RUN_TIME: ${{ steps.previous-run.outputs.previous_run_time }}
+          FIRST_RUN: ${{ steps.previous-run.outputs.first_run }}
+        run: |
+          set -euo pipefail
+
+          OWNER="${GITHUB_REPOSITORY_OWNER}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+
+          echo "Repository: ${OWNER}/${REPO}"
+
+          curl --fail-with-body \
+            --silent \
+            --show-error \
+            --request GET \
+            --url "https://api.github.com/repos/${OWNER}/${REPO}/dependabot/alerts?state=open%2Cfixed%2Cdismissed%2Cauto_dismissed&sort=updated&direction=desc&per_page=100" \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            --output dependabot-alerts.json
+
+          python <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          with open("dependabot-alerts.json", "r", encoding="utf-8") as f:
+              alerts = json.load(f)
+
+          previous_run = os.environ.get("PREVIOUS_RUN_TIME", "")
+          first_run = os.environ.get("FIRST_RUN") == "true"
+
+          def parse_timestamp(value):
+              if not value:
+                  return None
+
+              return datetime.fromisoformat(
+                  value.replace("Z", "+00:00")
+              )
+
+          if first_run:
+              # On the first run, only report currently OPEN alerts.
+              changed_alerts = [
+                  alert
+                  for alert in alerts
+                  if alert.get("state") == "open"
+              ]
+
+              print(
+                  f"First run: found {len(changed_alerts)} "
+                  "currently open alert(s)."
+              )
+
+          else:
+              previous_time = parse_timestamp(previous_run)
+
+              changed_alerts = []
+
+              for alert in alerts:
+                  updated_at = parse_timestamp(
+                      alert.get("updated_at")
+                  )
+
+                  if updated_at and updated_at > previous_time:
+                      changed_alerts.append(alert)
+
+              print(
+                  f"Found {len(changed_alerts)} alert(s) "
+                  f"updated since {previous_run}."
+              )
+
+          with open(
+              "changed-dependabot-alerts.json",
+              "w",
+              encoding="utf-8"
+          ) as f:
+              json.dump(
+                  changed_alerts,
+                  f,
+                  indent=2
+              )
+          PY
+
+      # ---------------------------------------------------------
+      # 3. Send only new/changed alerts to Slack
+      # ---------------------------------------------------------
+      - name: Send Dependabot security notifications to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          python <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          with open(
+              "changed-dependabot-alerts.json",
+              "r",
+              encoding="utf-8"
+          ) as f:
+              alerts = json.load(f)
+
+          if not alerts:
+              print("No new or changed Dependabot alerts.")
+              raise SystemExit(0)
+
+          messages = []
+
+          for alert in alerts:
+              number = alert.get("number", "unknown")
+              state = alert.get("state", "unknown")
+
+              dependency = alert.get("dependency") or {}
+              package = dependency.get("package") or {}
+
+              package_name = package.get(
+                  "name",
+                  "Unknown dependency"
+              )
+
+              ecosystem = package.get(
+                  "ecosystem",
+                  "unknown"
+              )
+
+              advisory = alert.get("security_advisory") or {}
+
+              severity = (
+                  advisory.get("severity")
+                  or "unknown"
+              ).upper()
+
+              summary = advisory.get(
+                  "summary",
+                  "Known vulnerability detected"
+              )
+
+              cve = advisory.get("cve_id")
+              ghsa = advisory.get("ghsa_id")
+
+              vulnerability = (
+                  alert.get("security_vulnerability")
+                  or {}
+              )
+
+              vulnerable_range = vulnerability.get(
+                  "vulnerable_version_range",
+                  "unknown"
+              )
+
+              patched = (
+                  vulnerability.get(
+                      "first_patched_version"
+                  )
+                  or {}
+              )
+
+              patched_version = patched.get(
+                  "identifier"
+              )
+
+              alert_url = alert.get(
+                  "html_url",
+                  ""
+              )
+
+              if state == "open":
+                  if patched_version:
+                      event = "🚨 Vulnerability Update"
+                  else:
+                      event = "🚨 New Security Vulnerability"
+
+              elif state == "fixed":
+                  event = "✅ Vulnerability Fixed"
+
+              elif state == "dismissed":
+                  event = "⚠️ Vulnerability Dismissed"
+
+              elif state == "auto_dismissed":
+                  event = "⚠️ Vulnerability Auto-Dismissed"
+
+              else:
+                  event = "🔔 Dependabot Security Alert"
+
+              lines = [
+                  f"*{event}*",
+                  "",
+                  f"*Repository:* {os.environ['GITHUB_REPOSITORY']}",
+                  f"*Dependency:* `{package_name}`",
+                  f"*Ecosystem:* `{ecosystem}`",
+                  f"*Severity:* `{severity}`",
+                  f"*State:* `{state}`",
+                  f"*Alert:* #{number}",
+                  "",
+                  f"*Summary:* {summary}",
+                  f"*Vulnerable range:* `{vulnerable_range}`",
+              ]
+
+              if patched_version:
+                  lines.append(
+                      f"*Patched version:* `{patched_version}`"
+                  )
+              else:
+                  lines.append(
+                      "*Patched version:* Not currently available"
+                  )
+
+              if cve:
+                  lines.append(f"*CVE:* `{cve}`")
+
+              if ghsa:
+                  lines.append(f"*GHSA:* `{ghsa}`")
+
+              if alert_url:
+                  lines.append(
+                      f"<{alert_url}|View Dependabot Alert>"
+                  )
+
+              messages.append("\n".join(lines))
+
+          # Send each alert separately so one Slack message
+          # corresponds to one security event.
+          for message in messages:
+              payload = json.dumps({
+                  "text": message
+              }).encode("utf-8")
+
+              request = urllib.request.Request(
+                  os.environ["SLACK_WEBHOOK_URL"],
+                  data=payload,
+                  headers={
+                      "Content-Type": "application/json"
+                  },
+                  method="POST"
+              )
+
+              with urllib.request.urlopen(request) as response:
+                  if response.status < 200 or response.status >= 300:
+                      raise RuntimeError(
+                          f"Slack returned HTTP {response.status}"
+                      )
+
+          print(
+              f"Sent {len(messages)} security notification(s) to Slack."
+          )
+          PY
+
+===============================================
+.github/workflows/
+
+├── dependabot-notification.yml
+│       │
+│       └── Dependabot PR opened
+│              ↓
+│            Slack 📦
+│
+├── dependabot-security-notification.yml
+│       │
+│       └── Dependabot vulnerability
+│              ↓
+│            Slack 🚨
+│
+├── dependabot-major-review.yml
+│       │
+│       └── Monthly major-version review
+│              ↓
+│            Slack 📋
+│
+└── security-scheduled.yml
+        │
+        └── Trivy scan
+               ↓
+             Slack 🔐
+
+This is a much better operational model than saying "never upgrade major versions."
+
+You're essentially saying:
+
+"Don't let major upgrades happen automatically, but don't let them disappear either."
+
+
+============================================
+Better Dependabot Strategy
+
+I usually recommend:
+
+Auto-merge
+i)Patch Updates low Risk:
+1.20.1 → 1.20.2
+
+ii)Manual Review
+1.20.1 → 1.21.0
+Show more lines
+
+iii)Strict Review
+Major Updates
+1.20.1 → 5.6.0
+Show more lines
+
+
+
