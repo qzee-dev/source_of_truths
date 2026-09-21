@@ -358,51 +358,106 @@ jobs:
           echo "$SERVICE:$VERSION"
           echo "$SERVICE@$DIGEST"
 
+      
       #################################################
-      # Configure Kubectl
+      #  GitOps Promotion
       #################################################
-
-      - name: Configure Kubectl
-        shell: bash
+      - name: Update STAGING GitOps image
+        env:
+          SERVICE: ${{ env.SERVICE }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          DIGEST: ${{ env.DIGEST }}
         run: |
 
           set -euo pipefail
 
-          aws eks update-kubeconfig \
-            --region "$AWS_REGION" \
-            --name fintech-production
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+
+          service = os.environ["SERVICE"]
+          image_tag = os.environ["IMAGE_TAG"]
+          digest = os.environ["DIGEST"]
+
+          file = Path(
+              f"gitops/environments/staging/{service}/values.yaml"
+          )
+
+          text = file.read_text()
+
+          text, tag_count = re.subn(
+              r'(^\s*tag:\s*")[^"]*(")',
+              rf'\g<1>{image_tag}\g<2>',
+              text,
+              count=1,
+              flags=re.MULTILINE
+          )
+
+          text, digest_count = re.subn(
+              r'(^\s*digest:\s*")[^"]*(")',
+              rf'\g<1>{digest}\g<2>',
+              text,
+              count=1,
+              flags=re.MULTILINE
+          )
+
+          if tag_count != 1:
+              raise SystemExit(
+                  f"Could not update image tag in {file}"
+              )
+
+          if digest_count != 1:
+              raise SystemExit(
+                  f"Could not update image digest in {file}"
+              )
+
+          file.write_text(text)
+          PY
+
+
+      #################################################
+      # Commit and Push STAGING GitOps Changes
+      #################################################
+      - name: Commit STAGING GitOps promotion
+        working-directory: enterprise-gitops
+        env:
+          SERVICE: ${{ env.SERVICE }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "environments/staging/${SERVICE}/values.yaml"
+
+          git commit \
+            -m "promote ${SERVICE} ${IMAGE_TAG} to staging"
+
+          git push
+
+      #################################################
+      # Wait For Argo CD  synchronization
+      #################################################
+      
+      - name: Wait For Argo CD Deployment
+        env:
+          SERVICE: ${{ env.SERVICE }}
+       run: |
+
+         set -euo pipefail
+
+         echo "Waiting for Argo CD to synchronize ${SERVICE}..."
+
 
       #################################################
       # Deploy Exact Same Digest
       #################################################
 
-      - name: Deploy To Production
-        shell: bash
-        run: |
-
-          set -euo pipefail
-
-          helm upgrade fintech ./helm \
-            --install \
-            --namespace production \
-            --create-namespace \
-            --set image.repository="$SERVICE" \
-            --set image.digest="$DIGEST"
-
-      #################################################
-      # Verify Production Rollout
-      #################################################
-
-      - name: Verify Rollout
-        shell: bash
-        run: |
-
-          set -euo pipefail
-
-          kubectl rollout status \
-            deployment/"$SERVICE" \
-            --namespace production \
-            --timeout=10m
+  
 
       #################################################
       # Verify Production Digest
