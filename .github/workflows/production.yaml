@@ -362,7 +362,7 @@ jobs:
       #################################################
       #  GitOps Promotion
       #################################################
-      - name: Update STAGING GitOps image
+      - name: Update production GitOps image
         env:
           SERVICE: ${{ env.SERVICE }}
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
@@ -417,9 +417,9 @@ jobs:
 
 
       #################################################
-      # Commit and Push STAGING GitOps Changes
+      # Commit and Push production GitOps Changes
       #################################################
-      - name: Commit STAGING GitOps promotion
+      - name: Commit production GitOps promotion
         working-directory: enterprise-gitops
         env:
           SERVICE: ${{ env.SERVICE }}
