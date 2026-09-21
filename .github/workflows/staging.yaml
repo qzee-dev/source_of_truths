@@ -56,10 +56,24 @@ jobs:
       # Checkout
       #################################################
 
-      - name: Checkout Repository
+      - name: Checkout Source Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+
+       #################################################
+      # Checkout
+      #For example, if your organization is fintech-org and your GitOps repo is fintech-gitops:
+      #################################################
+
+      - name: Checkout GitOps Repository
+        uses: actions/checkout@v4
+        with:
+         repository: YOUR_ORG/YOUR-GITOPS-REPO
+         token: ${{ secrets.GITOPS_TOKEN }}
+         path: gitops
+         fetch-depth: 0
 
       #################################################
       # Download Release Metadata
@@ -255,7 +269,7 @@ jobs:
           digest = os.environ["DIGEST"]
 
           file = Path(
-              f"environments/staging/{service}/values.yaml"
+              f"gitops/environments/staging/{service}/values.yaml"
           )
 
           text = file.read_text()
@@ -294,6 +308,7 @@ jobs:
       # Commit and Push STAGING GitOps Changes
       #################################################
       - name: Commit STAGING GitOps promotion
+        working-directory: gitops
         env:
           SERVICE: ${{ env.SERVICE }}
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
@@ -313,19 +328,17 @@ jobs:
           git push
 
       #################################################
-      # Verify Rollout
+      # Wait For Argo CD  synchronization
       #################################################
+      
+      - name: Wait For Argo CD Deployment
+        env:
+          SERVICE: ${{ env.SERVICE }}
+       run: |
 
-      - name: Verify Rollout
-        shell: bash
-        run: |
+         set -euo pipefail
 
-          set -euo pipefail
-
-          kubectl rollout status \
-            deployment/"$SERVICE" \
-            --namespace staging \
-            --timeout=10m
+         echo "Waiting for Argo CD to synchronize ${SERVICE}..."
 
       #################################################
       # Verify Deployed Digest
