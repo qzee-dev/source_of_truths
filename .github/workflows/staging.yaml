@@ -308,7 +308,7 @@ jobs:
       # Commit and Push STAGING GitOps Changes
       #################################################
       - name: Commit STAGING GitOps promotion
-        working-directory: gitops
+        working-directory: enterprise-gitops
         env:
           SERVICE: ${{ env.SERVICE }}
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
