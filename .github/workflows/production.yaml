@@ -66,6 +66,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      
+       #################################################
+      # Checkout
+      #For example, if your organization is fintech-org and your GitOps repo is fintech-gitops:
+      #################################################
+
+      - name: Checkout GitOps Repository
+        uses: actions/checkout@v4
+        with:
+         repository: YOUR_ORG/YOUR-GITOPS-REPO
+         token: ${{ secrets.GITOPS_TOKEN }}
+         path: gitops
+         fetch-depth: 0
+
       #################################################
       # Download Release Metadata
       #################################################
@@ -381,7 +395,7 @@ jobs:
           digest = os.environ["DIGEST"]
 
           file = Path(
-              f"gitops/environments/staging/{service}/values.yaml"
+              f"enterprise-gitops/environments/production/{service}/values.yaml"
           )
 
           text = file.read_text()
@@ -432,7 +446,7 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add "environments/staging/${SERVICE}/values.yaml"
+          git add "environments/production/${SERVICE}/values.yaml"
 
           git commit \
             -m "promote ${SERVICE} ${IMAGE_TAG} to staging"
