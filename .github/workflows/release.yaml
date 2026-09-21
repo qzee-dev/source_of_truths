@@ -119,46 +119,50 @@ jobs:
       #################################################
       # Generate Release Metadata
       #################################################
+            #################################################
+      # Generate Release Metadata
+      #################################################
 
-      - name: Generate Release Metadata
-        id: metadata
+      - name: Write Release Artifact
         shell: bash
         run: |
 
           set -euo pipefail
 
-          SERVICE="${{ inputs.service }}"
-          VERSION="${{ inputs.version }}"
+          mkdir -p release
 
-          COMMIT="$(git rev-parse HEAD)"
-          SHORT_COMMIT="$(git rev-parse --short=7 HEAD)"
+          cat <<EOF > release/release.json
+          {
+            "release_id": "${RELEASE_ID}",
+            "service": "${SERVICE}",
+            "version": "${VERSION}",
+            "image_tag": "${IMAGE_TAG}",
+            "digest": "${DIGEST}",
+            "commit": "${COMMIT}",
+            "short_commit": "${SHORT_COMMIT}",
+            "ecr_repository": "${ECR_REGISTRY}/${SERVICE}",
+            "source_repository": "${GITHUB_REPOSITORY}",
+            "environment": "pending",
+            "created_at": "$(date -u +%FT%TZ)",
+            "release_workflow": "${GITHUB_WORKFLOW}",
+            "release_run_id": "${GITHUB_RUN_ID}"
+          }
+          EOF
 
-          IMAGE_TAG="${VERSION}-${SHORT_COMMIT}"
-
-          RELEASE_ID="${SERVICE}-${VERSION}-${SHORT_COMMIT}"
-
-          echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-
-          echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
-          echo "SHORT_COMMIT=$SHORT_COMMIT" >> "$GITHUB_ENV"
-          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
-          echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
+          echo "$SERVICE" > release/service.txt
+          echo "$VERSION" > release/version.txt
+          echo "$IMAGE_TAG" > release/image-tag.txt
+          echo "$DIGEST" > release/digest.txt
+          echo "$COMMIT" > release/commit.txt
+          echo "$RELEASE_ID" > release/release-id.txt
 
           echo "======================================"
-          echo "Release Metadata"
+          echo "Release Artifact"
           echo "======================================"
-          echo "Service    : $SERVICE"
-          echo "Version    : $VERSION"
-          echo "Commit     : $COMMIT"
-          echo "Image Tag  : $IMAGE_TAG"
-          echo "Release ID : $RELEASE_ID"
+          cat release/release.json
           echo "======================================"
+
+      
 
       #################################################
       # Node
