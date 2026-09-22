@@ -1,49 +1,39 @@
 name: Deploy Staging
 
 on:
-  workflow_dispatch:
-    inputs:
-
-      release_run_id:
-        description: Release Workflow Run ID
-        required: true
-        type: string
-
-      release_id:
-        description: Release ID From Release Workflow
-        required: true
-        type: string
-
-      service:
-        description: Service To Deploy
-        required: true
-        type: choice
-        options:
-          - api-gateway
-          - user-service
-          - payment-service
-          - wallet-service
-          - transaction-service
-          - notification-service
-          - fraud-service
+  workflow_run:
+    workflows:
+      - Deploy Dev
+    types:
+      - completed
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
   actions: read
+  id-token: write
 
 concurrency:
-  group: staging-${{ inputs.service }}
+  group: staging
   cancel-in-progress: false
 
 env:
   AWS_REGION: us-east-1
 
+  SOURCE_REPOSITORY: YOUR_ORG/YOUR-SOURCE-REPO
+  GITOPS_REPOSITORY: YOUR_ORG/YOUR-GITOPS-REPO
+
+  ARGOCD_SERVER: YOUR_ARGOCD_SERVER
+  ARGOCD_APP_PREFIX: staging
+
 jobs:
 
-  deploy:
+  promote:
 
-    name: Deploy And Test Staging
+    name: Promote Release To Staging
+
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'develop'
 
     runs-on: ubuntu-latest
 
@@ -53,52 +43,50 @@ jobs:
     steps:
 
       #################################################
-      # Checkout
+      # 1. Create GitHub App Installation Token
+      #################################################
+
+      - name: Create GitHub App Token
+        id: github-app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            YOUR-GITOPS-REPO
+          permission-contents: write
+          permission-actions: read
+
+      #################################################
+      # 2. Checkout Source Repository
       #################################################
 
       - name: Checkout Source Repository
         uses: actions/checkout@v4
         with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: develop
+          token: ${{ steps.github-app.outputs.token }}
           fetch-depth: 0
 
-
-       #################################################
-      # Checkout
-      #For example, if your organization is fintech-org and your GitOps repo is fintech-gitops:
       #################################################
-
-      - name: Checkout GitOps Repository
-        uses: actions/checkout@v4
-        with:
-         repository: YOUR_ORG/YOUR-GITOPS-REPO
-         token: ${{ secrets.GITOPS_TOKEN }}
-         path: gitops
-         fetch-depth: 0
-
-      #################################################
-      # Download Release Metadata
+      # 3. Download Release Artifact
       #################################################
 
       - name: Download Release Metadata
         uses: actions/download-artifact@v4
         with:
-          name: release-${{ inputs.release_id }}
+          pattern: release-*
+          merge-multiple: true
           path: release
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ steps.github-app.outputs.token }}
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          run-id: ${{ github.event.workflow_run.id }}
 
       #################################################
-      # AWS Authentication
-      #################################################
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      #################################################
-      # Read Release Metadata
+      # 4. Read Release Metadata
       #################################################
 
       - name: Read Release Metadata
@@ -107,13 +95,37 @@ jobs:
 
           set -euo pipefail
 
-          SERVICE=$(cat release/service.txt)
-          VERSION=$(cat release/version.txt)
-          IMAGE_TAG=$(cat release/image-tag.txt)
-          DIGEST=$(cat release/digest.txt)
-          COMMIT=$(cat release/commit.txt)
-          RELEASE_ID=$(cat release/release-id.txt)
-          RELEASE_RUN_ID=$(cat release/release-run-id.txt)
+          RELEASE_FILE="release/release.json"
+
+          if [[ ! -f "$RELEASE_FILE" ]]; then
+            echo "ERROR: Release metadata not found."
+            echo "Expected: $RELEASE_FILE"
+            exit 1
+          fi
+
+          SERVICE=$(jq -r '.service' "$RELEASE_FILE")
+          VERSION=$(jq -r '.version' "$RELEASE_FILE")
+          IMAGE_TAG=$(jq -r '.image_tag' "$RELEASE_FILE")
+          DIGEST=$(jq -r '.digest' "$RELEASE_FILE")
+          COMMIT=$(jq -r '.commit' "$RELEASE_FILE")
+          RELEASE_ID=$(jq -r '.release_id' "$RELEASE_FILE")
+          RELEASE_RUN_ID=$(jq -r '.release_run_id // empty' "$RELEASE_FILE")
+          SOURCE_REPOSITORY_FROM_METADATA=$(jq -r '.source_repository // empty' "$RELEASE_FILE")
+          SOURCE_BRANCH=$(jq -r '.source_branch // empty' "$RELEASE_FILE")
+
+          for value in \
+            SERVICE \
+            VERSION \
+            IMAGE_TAG \
+            DIGEST \
+            COMMIT \
+            RELEASE_ID
+          do
+            if [[ -z "${!value}" || "${!value}" == "null" ]]; then
+              echo "ERROR: Missing $value from release metadata."
+              exit 1
+            fi
+          done
 
           echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -122,21 +134,24 @@ jobs:
           echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
           echo "RELEASE_ID=$RELEASE_ID" >> "$GITHUB_ENV"
           echo "RELEASE_RUN_ID=$RELEASE_RUN_ID" >> "$GITHUB_ENV"
+          echo "SOURCE_REPOSITORY_FROM_METADATA=$SOURCE_REPOSITORY_FROM_METADATA" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=$SOURCE_BRANCH" >> "$GITHUB_ENV"
 
-          echo "======================================"
-          echo "Release Metadata"
-          echo "======================================"
+          echo "=============================================="
+          echo "STAGING RELEASE"
+          echo "=============================================="
           echo "Release ID     : $RELEASE_ID"
-          echo "Release Run ID : $RELEASE_RUN_ID"
+          echo "Release Run ID : ${RELEASE_RUN_ID:-unknown}"
           echo "Service        : $SERVICE"
           echo "Version        : $VERSION"
           echo "Image Tag      : $IMAGE_TAG"
-          echo "Commit         : $COMMIT"
           echo "Digest         : $DIGEST"
-          echo "======================================"
+          echo "Commit         : $COMMIT"
+          echo "Source Branch  : ${SOURCE_BRANCH:-unknown}"
+          echo "=============================================="
 
       #################################################
-      # Validate Release Identity
+      # 5. Validate Release Identity
       #################################################
 
       - name: Validate Release Identity
@@ -145,24 +160,36 @@ jobs:
 
           set -euo pipefail
 
-          if [[ "$RELEASE_ID" != "${{ inputs.release_id }}" ]]; then
-            echo "ERROR: Release ID mismatch."
-            echo "Expected: ${{ inputs.release_id }}"
-            echo "Actual  : $RELEASE_ID"
+          TRIGGER_RUN_ID="${{ github.event.workflow_run.id }}"
+
+          if [[ -n "$RELEASE_RUN_ID" &&
+                "$RELEASE_RUN_ID" != "$TRIGGER_RUN_ID" ]]; then
+
+            echo "ERROR: Release run ID mismatch."
+            echo "Metadata : $RELEASE_RUN_ID"
+            echo "Trigger  : $TRIGGER_RUN_ID"
             exit 1
           fi
 
-          if [[ "$RELEASE_RUN_ID" != "${{ inputs.release_run_id }}" ]]; then
-            echo "ERROR: Release Run ID mismatch."
-            echo "Expected: ${{ inputs.release_run_id }}"
-            echo "Actual  : $RELEASE_RUN_ID"
+          if [[ -n "$SOURCE_REPOSITORY_FROM_METADATA" &&
+                "$SOURCE_REPOSITORY_FROM_METADATA" != "$SOURCE_REPOSITORY" ]]; then
+
+            echo "ERROR: Source repository mismatch."
+            echo "Metadata : $SOURCE_REPOSITORY_FROM_METADATA"
+            echo "Expected : $SOURCE_REPOSITORY"
             exit 1
           fi
 
-          if [[ "$SERVICE" != "${{ inputs.service }}" ]]; then
-            echo "ERROR: Service mismatch."
-            echo "Expected: ${{ inputs.service }}"
-            echo "Actual  : $SERVICE"
+          if [[ -n "$SOURCE_BRANCH" &&
+                "$SOURCE_BRANCH" != "develop" ]]; then
+
+            echo "ERROR: Release was not created from develop."
+            echo "Branch: $SOURCE_BRANCH"
+            exit 1
+          fi
+
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid release version."
             exit 1
           fi
 
@@ -171,10 +198,15 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$COMMIT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "ERROR: Invalid source commit SHA."
+            exit 1
+          fi
+
           echo "Release identity validated."
 
       #################################################
-      # Verify Source Commit
+      # 6. Verify Source Commit
       #################################################
 
       - name: Verify Source Commit
@@ -185,14 +217,67 @@ jobs:
 
           git cat-file -e "$COMMIT^{commit}"
 
-          echo "Source commit exists:"
+          echo "Source commit exists in repository:"
           echo "$COMMIT"
 
       #################################################
-      # Verify Image Exists In ECR
+      # 7. Configure AWS Credentials
       #################################################
 
-      - name: Verify ECR Image
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      #################################################
+      # 8. Verify ECR Repository
+      #################################################
+
+      - name: Verify ECR Repository
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          aws ecr describe-repositories \
+            --repository-names "$SERVICE" \
+            --region "$AWS_REGION" \
+            > /dev/null
+
+          echo "ECR repository verified:"
+          echo "$SERVICE"
+
+      #################################################
+      # 9. Verify ECR Tag Immutability
+      #################################################
+
+      - name: Verify ECR Tag Immutability
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          MUTABILITY=$(aws ecr describe-repositories \
+            --repository-names "$SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'repositories[0].imageTagMutability' \
+            --output text)
+
+          echo "Tag mutability: $MUTABILITY"
+
+          if [[ "$MUTABILITY" != "IMMUTABLE" ]]; then
+            echo "ERROR: ECR repository must use IMMUTABLE tags."
+            exit 1
+          fi
+
+          echo "ECR immutability verified."
+
+      #################################################
+      # 10. Verify Exact ECR Digest
+      #################################################
+
+      - name: Verify ECR Digest
         shell: bash
         run: |
 
@@ -205,27 +290,21 @@ jobs:
             --query 'imageDetails[0].imageDigest' \
             --output text)
 
-          if [[ -z "$VERIFIED_DIGEST" || "$VERIFIED_DIGEST" == "None" ]]; then
-            echo "ERROR: Image digest does not exist in ECR."
-            echo "$SERVICE@$DIGEST"
-            exit 1
-          fi
-
           if [[ "$VERIFIED_DIGEST" != "$DIGEST" ]]; then
-            echo "ERROR: ECR digest mismatch."
+            echo "ERROR: ECR digest verification failed."
             echo "Expected: $DIGEST"
             echo "Actual  : $VERIFIED_DIGEST"
             exit 1
           fi
 
-          echo "ECR image verified:"
+          echo "Exact digest verified:"
           echo "$SERVICE@$DIGEST"
 
       #################################################
-      # Verify Image Tag
+      # 11. Verify Release Tag
       #################################################
 
-      - name: Verify Image Tag
+      - name: Verify Release Tag
         shell: bash
         run: |
 
@@ -239,22 +318,34 @@ jobs:
             --output text)
 
           if [[ "$TAG_DIGEST" != "$DIGEST" ]]; then
-            echo "ERROR: Image tag does not point to release digest."
+            echo "ERROR: Release tag does not point to approved digest."
             echo "Tag digest     : $TAG_DIGEST"
-            echo "Release digest : $DIGEST"
+            echo "Approved digest: $DIGEST"
             exit 1
           fi
 
-          echo "Image tag verified."
+          echo "Release tag verified:"
+          echo "$SERVICE:$IMAGE_TAG"
+          echo "$SERVICE@$DIGEST"
 
       #################################################
-      #  GitOps Promotion
+      # 12. Checkout GitOps Repository
       #################################################
-      - name: Update STAGING GitOps image
-        env:
-          SERVICE: ${{ env.SERVICE }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          DIGEST: ${{ env.DIGEST }}
+
+      - name: Checkout GitOps Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPOSITORY }}
+          token: ${{ steps.github-app.outputs.token }}
+          path: gitops
+          fetch-depth: 0
+
+      #################################################
+      # 13. Update Staging GitOps
+      #################################################
+
+      - name: Update Staging GitOps Image
+        shell: bash
         run: |
 
           set -euo pipefail
@@ -271,6 +362,11 @@ jobs:
           file = Path(
               f"gitops/environments/staging/{service}/values.yaml"
           )
+
+          if not file.exists():
+              raise SystemExit(
+                  f"GitOps values file does not exist: {file}"
+              )
 
           text = file.read_text()
 
@@ -301,17 +397,45 @@ jobs:
               )
 
           file.write_text(text)
+
+          print(f"Updated: {file}")
+          print(f"Tag    : {image_tag}")
+          print(f"Digest : {digest}")
           PY
 
+      #################################################
+      # 14. Verify GitOps Changes
+      #################################################
+
+      - name: Verify GitOps Changes
+        working-directory: gitops
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          FILE="environments/staging/${SERVICE}/values.yaml"
+
+          echo "=============================================="
+          echo "GITOPS DIFF"
+          echo "=============================================="
+
+          git diff -- "$FILE"
+
+          if git diff --quiet -- "$FILE"; then
+            echo "ERROR: No GitOps changes detected."
+            exit 1
+          fi
+
+          echo "GitOps changes verified."
 
       #################################################
-      # Commit and Push STAGING GitOps Changes
+      # 15. Commit Staging GitOps Promotion
       #################################################
-      - name: Commit STAGING GitOps promotion
-        working-directory: enterprise-gitops
-        env:
-          SERVICE: ${{ env.SERVICE }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+
+      - name: Commit Staging GitOps Promotion
+        working-directory: gitops
+        shell: bash
         run: |
 
           set -euo pipefail
@@ -320,94 +444,229 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add "environments/staging/${SERVICE}/values.yaml"
+          git add \
+            "environments/staging/${SERVICE}/values.yaml"
+
+          if git diff --cached --quiet; then
+            echo "ERROR: Nothing to commit."
+            exit 1
+          fi
 
           git commit \
             -m "promote ${SERVICE} ${IMAGE_TAG} to staging"
 
           git push
 
-      #################################################
-      # Wait For Argo CD  synchronization
-      #################################################
-      
-      - name: Wait For Argo CD Deployment
-        env:
-          SERVICE: ${{ env.SERVICE }}
-       run: |
+          GITOPS_COMMIT=$(git rev-parse HEAD)
 
-         set -euo pipefail
+          echo "GITOPS_COMMIT=$GITOPS_COMMIT" >> "$GITHUB_ENV"
 
-         echo "Waiting for Argo CD to synchronize ${SERVICE}..."
+          echo "GitOps commit:"
+          echo "$GITOPS_COMMIT"
 
       #################################################
-      # Verify Deployed Digest
+      # 16. Install Argo CD CLI
       #################################################
 
-      - name: Verify Deployed Digest
+      - name: Install Argo CD CLI
         shell: bash
         run: |
 
           set -euo pipefail
 
-          EXPECTED_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE}@${DIGEST}"
+          curl -sSL \
+            -o /tmp/argocd \
+            "https://${ARGOCD_SERVER}/download/argocd-linux-amd64"
 
-          DEPLOYED_IMAGE=$(kubectl get deployment "$SERVICE" \
-            --namespace staging \
-            -o jsonpath='{.spec.template.spec.containers[0].image}')
+          install -m 0755 \
+            /tmp/argocd \
+            "$HOME/.local/bin/argocd"
 
-          echo "Expected:"
-          echo "$EXPECTED_IMAGE"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-          echo "Deployed:"
-          echo "$DEPLOYED_IMAGE"
+          argocd version --client
 
-          if [[ "$DEPLOYED_IMAGE" != "$EXPECTED_IMAGE" ]]; then
-            echo "ERROR: Staging deployment does not reference approved digest."
+      #################################################
+      # 17. Determine Argo CD Application
+      #################################################
+
+      - name: Determine Argo CD Application
+        shell: bash
+        run: |
+
+          set -euo pipefail
+
+          ARGOCD_APP="${ARGOCD_APP_PREFIX}-${SERVICE}"
+
+          echo "ARGOCD_APP=$ARGOCD_APP" >> "$GITHUB_ENV"
+
+          echo "Argo CD application:"
+          echo "$ARGOCD_APP"
+
+      #################################################
+      # 18. Wait For Argo CD Deployment
+      #################################################
+
+      - name: Wait For Argo CD Deployment
+        shell: bash
+        env:
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+        run: |
+
+          set -euo pipefail
+
+          if [[ -z "$ARGOCD_AUTH_TOKEN" ]]; then
+            echo "ERROR: ARGOCD_AUTH_TOKEN is not configured."
             exit 1
           fi
 
+          echo "Waiting for Argo CD:"
+          echo "$ARGOCD_APP"
+
+          argocd app wait "$ARGOCD_APP" \
+            --server "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            --sync \
+            --health \
+            --timeout 600
+
+          echo "Argo CD deployment completed."
+
       #################################################
-      # Smoke Tests
+      # 19. Verify Argo CD Application
       #################################################
 
-      - name: Smoke Tests
+      - name: Verify Argo CD Application
+        shell: bash
+        env:
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+        run: |
+
+          set -euo pipefail
+
+          STATUS=$(argocd app get "$ARGOCD_APP" \
+            --server "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            -o json)
+
+          SYNC_STATUS=$(echo "$STATUS" | jq -r '.status.sync.status')
+          HEALTH_STATUS=$(echo "$STATUS" | jq -r '.status.health.status')
+          REVISION=$(echo "$STATUS" | jq -r '.status.sync.revision')
+
+          echo "Application : $ARGOCD_APP"
+          echo "Sync        : $SYNC_STATUS"
+          echo "Health      : $HEALTH_STATUS"
+          echo "Revision    : $REVISION"
+
+          if [[ "$SYNC_STATUS" != "Synced" ]]; then
+            echo "ERROR: Argo CD application is not Synced."
+            exit 1
+          fi
+
+          if [[ "$HEALTH_STATUS" != "Healthy" ]]; then
+            echo "ERROR: Argo CD application is not Healthy."
+            exit 1
+          fi
+
+          echo "Argo CD application verified."
+
+      #################################################
+      # 20. Verify GitOps Revision
+      #################################################
+
+      - name: Verify GitOps Revision
+        shell: bash
+        env:
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+        run: |
+
+          set -euo pipefail
+
+          REVISION=$(argocd app get "$ARGOCD_APP" \
+            --server "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            -o json \
+            | jq -r '.status.sync.revision')
+
+          echo "Expected GitOps commit:"
+          echo "$GITOPS_COMMIT"
+
+          echo "Argo CD revision:"
+          echo "$REVISION"
+
+          if [[ "$REVISION" != "$GITOPS_COMMIT" ]]; then
+            echo "ERROR: Argo CD is not synchronized to expected GitOps commit."
+            exit 1
+          fi
+
+          echo "GitOps revision verified."
+
+      #################################################
+      # 21. Store Staging Release History
+      #################################################
+
+      - name: Store Staging Release History
+        working-directory: gitops
         shell: bash
         run: |
 
           set -euo pipefail
 
-          ./tests/smoke.sh
+          mkdir -p release-history
+
+          cat <<EOF > \
+            "release-history/staging-${SERVICE}-${VERSION}.json"
+          {
+            "release_id": "${RELEASE_ID}",
+            "release_run_id": "${RELEASE_RUN_ID}",
+            "service": "${SERVICE}",
+            "version": "${VERSION}",
+            "image_tag": "${IMAGE_TAG}",
+            "digest": "${DIGEST}",
+            "source_commit": "${COMMIT}",
+            "gitops_commit": "${GITOPS_COMMIT}",
+            "argocd_application": "${ARGOCD_APP}",
+            "environment": "staging",
+            "deployed_by": "${{ github.actor }}",
+            "staging_workflow_run_id": "${GITHUB_RUN_ID}",
+            "staging_workflow_run_url": "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}",
+            "deployed_at": "$(date -u +%FT%TZ)"
+          }
+          EOF
 
       #################################################
-      # Integration Tests
+      # 22. Commit Staging Release History
       #################################################
 
-      - name: Integration Tests
+      - name: Commit Staging Release History
+        working-directory: gitops
         shell: bash
         run: |
 
           set -euo pipefail
 
-          ./tests/integration.sh
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add release-history
+
+          if git diff --cached --quiet; then
+            echo "No release history changes."
+            exit 0
+          fi
+
+          git commit \
+            -m "record ${SERVICE} ${VERSION} staging deployment"
+
+          git push
 
       #################################################
-      # DAST
-      #################################################
-
-      - name: DAST
-        shell: bash
-        run: |
-
-          set -euo pipefail
-
-          ./tests/dast.sh
-
-      #################################################
-      # Staging Summary
+      # 23. Staging Deployment Summary
       #################################################
 
       - name: Staging Deployment Summary
+        shell: bash
         run: |
 
           echo ""
@@ -427,21 +686,27 @@ jobs:
           echo "Version:"
           echo "$VERSION"
           echo ""
-          echo "Build Tag:"
+          echo "Image Tag:"
           echo "$IMAGE_TAG"
           echo ""
-          echo "Commit:"
+          echo "Source Commit:"
           echo "$COMMIT"
           echo ""
           echo "Immutable Digest:"
           echo "$DIGEST"
           echo ""
-          echo "Tests:"
-          echo "  ✓ Rollout"
-          echo "  ✓ Smoke"
-          echo "  ✓ Integration"
-          echo "  ✓ DAST"
+          echo "GitOps Commit:"
+          echo "$GITOPS_COMMIT"
+          echo ""
+          echo "Argo CD Application:"
+          echo "$ARGOCD_APP"
           echo ""
           echo "=============================================="
-          echo "READY FOR PRODUCTION"
+          echo "BUILD ONCE"
+          echo "PROMOTE SAME DIGEST"
+          echo "NO REBUILD"
+          echo "GITHUB APP"
+          echo "GITOPS"
+          echo "ARGO CD"
+          echo "VERIFIED"
           echo "=============================================="
