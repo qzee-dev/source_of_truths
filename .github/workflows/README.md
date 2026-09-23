@@ -1051,6 +1051,51 @@ release-history/
 ```
 
 ---
+Checkout
+
+Branch validation
+
+Version validation
+
+Service validation
+
+Release metadata
+
+Node/pnpm toolchain
+
+Dependencies
+
+AWS authentication
+
+ECR repository validation
+
+ECR immutability
+
+Tag availability
+
+ECR login
+
+Docker build
+
+Trivy scan
+
+Security policy evaluation
+
+Slack security alert
+
+Security gate enforcement
+
+Docker push
+
+Digest capture
+
+Digest verification
+
+Release artifact generation
+
+Artifact upload
+
+Release summary
 
  # Final Model
 
