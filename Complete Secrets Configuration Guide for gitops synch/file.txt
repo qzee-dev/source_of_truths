@@ -1,0 +1,405 @@
+# 🔐 Complete Secrets Configuration Guide
+
+Based on the exact workflow patterns, here are **ALL the secret variables required** to connect the application repo and manifest repo:
+
+---
+
+## 📋 Secrets Summary Table
+
+| Secret Name | Workflow(s) | Purpose | Scope | Type |
+|-------------|-----------|---------|-------|------|
+| `AWS_ACCOUNT_ID` | release.yml, deploy-*.yaml | ECR registry account number | Repository | Plain text |
+| `AWS_ROLE_ARN` | release.yml, deploy-dev.yaml, deploy-staging.yaml, deploy-production.yaml | OIDC IAM role for AWS access | Repository + Environment | Plain text |
+| `RELEASE_REPOSITORY_TOKEN` | deploy-dev.yaml | Token to download release artifact | Repository | PAT/Token |
+| `RELEASE_APP_ID` | deploy-staging.yaml, deploy-production.yaml | GitHub App ID for GitOps repo access | Repository | Plain text |
+| `RELEASE_APP_PRIVATE_KEY` | deploy-staging.yaml, deploy-production.yaml | GitHub App private key | Repository | Secret (multi-line) |
+| `GH_APP_ID` | deploy-production.yaml | GitHub App ID for cross-repo access | Repository | Plain text |
+| `GH_APP_PRIVATE_KEY` | deploy-production.yaml | GitHub App private key | Repository | Secret (multi-line) |
+| `ARGOCD_AUTH_TOKEN` | deploy-staging.yaml, deploy-production.yaml | Argo CD authentication token | Repository + Environment | Secret |
+| `SECURITY_SLACK_WEBHOOK_URL` | release.yml | Slack webhook for security alerts | Repository | Secret (URL) |
+
+---
+
+## 🔑 Detailed Secrets Configuration
+
+### 1. **AWS_ACCOUNT_ID**
+
+**Where:** `release.yml` line 34
+```yaml
+ECR_REGISTRY: "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com"
+```
+
+**Type:** Plain text  
+**Value:** Your 12-digit AWS account ID (e.g., `123456789012`)  
+**Scope:** Repository level  
+**How to create:**
+- Settings → Secrets and variables → Actions → New repository secret
+- Name: `AWS_ACCOUNT_ID`
+- Value: `123456789012`
+
+---
+
+### 2. **AWS_ROLE_ARN**
+
+**Where:** Multiple workflows
+- `release.yml` line 211
+- `deploy-dev.yaml` line 163
+- `deploy-staging.yaml` line 230
+- `deploy-production.yaml` line 277
+
+**Workflow usage:**
+```yaml
+role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+```
+
+**Type:** Plain text  
+**Value:** IAM role ARN (e.g., `arn:aws:iam::123456789012:role/GitHubActionsRole`)  
+**Scope:** Repository level + Environment level  
+
+**How to create:**
+
+1. **Create IAM Role in AWS:**
+   ```bash
+   # Trust policy for GitHub OIDC
+   cat > trust-policy.json <<EOF
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+         },
+         "Action": "sts:AssumeRoleWithWebIdentity",
+         "Condition": {
+           "StringEquals": {
+             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+           },
+           "StringLike": {
+             "token.actions.githubusercontent.com:sub": "repo:Coreinfra-Labs/fintech-platform:*"
+           }
+         }
+       }
+     ]
+   }
+   EOF
+   
+   aws iam create-role \
+     --role-name GitHubActionsRole \
+     --assume-role-policy-document file://trust-policy.json
+   ```
+
+2. **Attach policies:**
+   ```bash
+   # ECR access
+   aws iam attach-role-policy \
+     --role-name GitHubActionsRole \
+     --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+   
+   # EKS access
+   aws iam attach-role-policy \
+     --role-name GitHubActionsRole \
+     --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+   ```
+
+3. **Get the ARN:**
+   ```bash
+   aws iam get-role --role-name GitHubActionsRole \
+     --query 'Role.Arn' --output text
+   ```
+
+4. **Add to GitHub Secrets:**
+   - Settings → Secrets and variables → Actions → New repository secret
+   - Name: `AWS_ROLE_ARN`
+   - Value: `arn:aws:iam::123456789012:role/GitHubActionsRole`
+
+---
+
+### 3. **RELEASE_REPOSITORY_TOKEN**
+
+**Where:** `deploy-dev.yaml` line 49
+```yaml
+github-token: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+```
+
+**Type:** GitHub Personal Access Token (PAT)  
+**Scope:** Repository level  
+**Permissions required:**
+- `actions:read` — Read GitHub Actions artifacts
+- `contents:read` — Read repository contents
+
+**How to create:**
+
+1. **Generate GitHub PAT:**
+   - GitHub Profile → Settings → Developer settings → Personal access tokens → Tokens (classic)
+   - Generate new token (classic)
+   - Scopes: `actions:read`, `contents:read`
+   - Copy the token
+
+2. **Add to GitHub Secrets:**
+   - Settings → Secrets and variables → Actions → New repository secret
+   - Name: `RELEASE_REPOSITORY_TOKEN`
+   - Value: `ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+
+---
+
+### 4. **RELEASE_APP_ID & RELEASE_APP_PRIVATE_KEY**
+
+**Where:** `deploy-staging.yaml` lines 53-54
+```yaml
+app-id: ${{ secrets.RELEASE_APP_ID }}
+private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+```
+
+**Purpose:** GitHub App for cross-repository access (source repo + GitOps repo)
+
+**Scope:** Repository level  
+
+**How to create:**
+
+1. **Create GitHub App:**
+   - GitHub Profile → Settings → Developer settings → GitHub Apps → New GitHub App
+   - Fill in:
+     - App name: `fintech-release-automation`
+     - Webhook: Uncheck (not needed)
+     - Repository permissions:
+       - `contents: read & write`
+       - `actions: read`
+
+2. **Generate private key:**
+   - App details page → Private keys → Generate a private key
+   - Copy the PEM content
+
+3. **Get App ID:**
+   - App ID is shown on the app details page
+
+4. **Add to GitHub Secrets:**
+   - Name: `RELEASE_APP_ID`
+   - Value: `123456` (the numeric ID)
+   
+   - Name: `RELEASE_APP_PRIVATE_KEY`
+   - Value: (paste the PEM private key, including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----`)
+
+---
+
+### 5. **GH_APP_ID & GH_APP_PRIVATE_KEY**
+
+**Where:** `deploy-production.yaml` lines 86-87
+```yaml
+app-id: ${{ secrets.GH_APP_ID }}
+private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+```
+
+**Purpose:** GitHub App for production deployment (same or different app from RELEASE_APP)
+
+**Can be the same as RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY** or separate for isolation.
+
+**Recommended:** Use the same app (just duplicate the secrets with different names for clarity).
+
+**How to create:**
+- Same as #4 above
+- Name: `GH_APP_ID`
+- Value: Same as `RELEASE_APP_ID`
+- Name: `GH_APP_PRIVATE_KEY`
+- Value: Same as `RELEASE_APP_PRIVATE_KEY`
+
+---
+
+### 6. **ARGOCD_AUTH_TOKEN**
+
+**Where:** `deploy-staging.yaml` line 513, `deploy-production.yaml` line 553
+```yaml
+env:
+  ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+```
+
+**Type:** Argo CD authentication token  
+**Scope:** Repository level + Environment level (staging, production)  
+
+**How to create:**
+
+1. **Generate token in Argo CD:**
+   ```bash
+   # Port-forward to Argo CD
+   kubectl port-forward -n argocd svc/argocd-server 8080:443
+   
+   # Login with admin
+   argocd login localhost:8080 --username admin --password <initial-admin-password>
+   
+   # Create a service account or use existing
+   argocd account generate-token --account github-actions
+   ```
+
+2. **Store token securely:**
+   - Settings → Secrets and variables → Actions → New repository secret
+   - Name: `ARGOCD_AUTH_TOKEN`
+   - Value: (paste the generated token)
+
+3. **Also add as Environment secret:**
+   - Settings → Environments → staging → Add secret
+   - Name: `ARGOCD_AUTH_TOKEN`
+   - Value: (same token)
+   
+   - Settings → Environments → production → Add secret
+   - Name: `ARGOCD_AUTH_TOKEN`
+   - Value: (same token)
+
+---
+
+### 7. **SECURITY_SLACK_WEBHOOK_URL**
+
+**Where:** `release.yml` line 488
+```yaml
+env:
+  WEBHOOK: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+```
+
+**Type:** Slack incoming webhook URL  
+**Scope:** Repository level  
+
+**How to create:**
+
+1. **Create Slack App:**
+   - Go to https://api.slack.com/apps
+   - Create New App → From scratch
+   - Name: `fintech-security-alerts`
+   - Workspace: Select your workspace
+
+2. **Enable Incoming Webhooks:**
+   - Left menu → Incoming Webhooks
+   - Activate Incoming Webhooks (toggle)
+   - Add New Webhook to Workspace
+   - Select channel (e.g., `#security-alerts`)
+   - Authorize
+
+3. **Copy Webhook URL:**
+   - Copy the URL (e.g., `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXX`)
+
+4. **Add to GitHub Secrets:**
+   - Settings → Secrets and variables → Actions → New repository secret
+   - Name: `SECURITY_SLACK_WEBHOOK_URL`
+   - Value: `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXX`
+
+---
+
+## 📍 Environment-Specific Secrets
+
+Some secrets should be added at **environment level** for extra protection:
+
+### **Dev Environment** (if used)
+- No additional secrets needed (inherits repository secrets)
+
+### **Staging Environment**
+- **ARGOCD_AUTH_TOKEN** (environment-level override recommended)
+- **ARGOCD_SERVER** (environment variable, not secret)
+
+Add at: Settings → Environments → staging → Environment secrets
+
+### **Production Environment**
+- **ARGOCD_AUTH_TOKEN** (environment-level override recommended)
+- **ARGOCD_SERVER** (environment variable, not secret)
+- **AWS_ROLE_ARN** (production-specific role recommended)
+
+Add at: Settings → Environments → production → Environment secrets
+
+---
+
+## 🔗 Environment Variables (NOT Secrets)
+
+**These are plain env vars, NOT secrets:**
+
+### In `deploy-staging.yaml`:
+```yaml
+env:
+  AWS_REGION: us-east-1
+  SOURCE_REPOSITORY: Coreinfra-Labs/fintech-platform
+  GITOPS_REPOSITORY: qzee-dev/fintech-enterprise-gitops-manifest
+  ARGOCD_SERVER: argocd.example.com
+  ARGOCD_APP_PREFIX: staging
+```
+
+### In `deploy-production.yaml`:
+```yaml
+env:
+  AWS_REGION: us-east-1
+  SOURCE_REPOSITORY: Coreinfra-Labs/fintech-platform
+  GITOPS_REPOSITORY: qzee-dev/fintech-enterprise-gitops-manifest
+  ARGOCD_SERVER: argocd.example.com
+  ARGOCD_APP_PREFIX: production
+```
+
+**How to set these:**
+- Edit the workflow files directly (they're not secrets)
+- Or use GitHub variables (Settings → Variables) and reference as `${{ vars.ARGOCD_SERVER }}`
+
+---
+
+## ✅ Complete Secrets Checklist
+
+Copy this checklist and verify each secret is configured:
+
+```markdown
+## Repository-Level Secrets
+
+- [ ] AWS_ACCOUNT_ID = 123456789012
+- [ ] AWS_ROLE_ARN = arn:aws:iam::123456789012:role/GitHubActionsRole
+- [ ] RELEASE_REPOSITORY_TOKEN = ghp_xxxx...
+- [ ] RELEASE_APP_ID = 123456
+- [ ] RELEASE_APP_PRIVATE_KEY = -----BEGIN RSA PRIVATE KEY-----\n...
+- [ ] GH_APP_ID = 123456
+- [ ] GH_APP_PRIVATE_KEY = -----BEGIN RSA PRIVATE KEY-----\n...
+- [ ] ARGOCD_AUTH_TOKEN = argocd_token_xxxx...
+- [ ] SECURITY_SLACK_WEBHOOK_URL = https://hooks.slack.com/services/...
+
+## Environment: dev
+- (inherits repository secrets)
+
+## Environment: staging
+- [ ] ARGOCD_AUTH_TOKEN (override or inherit from repo)
+
+## Environment: production
+- [ ] ARGOCD_AUTH_TOKEN (override or inherit from repo)
+- [ ] AWS_ROLE_ARN (production-specific recommended)
+
+## Environment Variables (not secrets, edit workflows)
+
+In deploy-staging.yaml:
+- [ ] SOURCE_REPOSITORY = Coreinfra-Labs/fintech-platform
+- [ ] GITOPS_REPOSITORY = qzee-dev/fintech-enterprise-gitops-manifest
+- [ ] ARGOCD_SERVER = argocd.yourdomain.com
+- [ ] ARGOCD_APP_PREFIX = staging
+
+In deploy-production.yaml:
+- [ ] SOURCE_REPOSITORY = Coreinfra-Labs/fintech-platform
+- [ ] GITOPS_REPOSITORY = qzee-dev/fintech-enterprise-gitops-manifest
+- [ ] ARGOCD_SERVER = argocd.yourdomain.com
+- [ ] ARGOCD_APP_PREFIX = production
+```
+
+---
+
+## 🔐 Security Best Practices
+
+1. **Use GitHub App over PAT when possible** — GitHub App tokens are more secure and scoped
+2. **Rotate secrets regularly** — Especially ARGOCD_AUTH_TOKEN
+3. **Environment secrets for sensitive stages** — production should have its own secrets
+4. **Use OIDC for AWS** — Avoids long-lived AWS credentials
+5. **Restrict GitHub App permissions** — Use minimal required scopes
+6. **Audit access logs** — Monitor who's using these secrets
+
+---
+
+## 🧪 Testing Secrets
+
+Once configured, verify they work:
+
+```bash
+# Test AWS credentials
+aws ecr describe-repositories --region us-east-1
+
+# Test GitHub App token (in workflow)
+curl -H "Authorization: token $GITHUB_APP_TOKEN" https://api.github.com/user
+
+# Test Argo CD token
+argocd app list --server $ARGOCD_SERVER --auth-token $ARGOCD_AUTH_TOKEN
+```
