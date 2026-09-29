@@ -1,0 +1,94 @@
+Teams:
+backend
+frontend
+platform
+devsecops
+security
+maintainers - write
+
+If you give a Senior Engineer Write permission, they can:
+ ✅ Create branches
+ ✅ Push commits to branches
+ ✅ Create PRs
+ ✅ Review PRs
+ ✅ Merge PRs (subject to branch protection)
+But the risk is:
+.github/workflows/
+``
+Production-Grade Protection
+Protect the main branch with rules such as
+
+✓ Require pull request
+✓ Require 2 approvals
+✓ Require status checks
+✓ Dismiss stale approvals
+✓ Require review from Code Owners
+``
+Then create a CODEOWNERS file:
+
+# Platform team owns CI/CD
+
+.github/workflows/ @coreinfra-labs/platform
+terraform/         @coreinfra-labs/platform
+helm/              @coreinfra-labs/platform
+
+# Backend
+
+apps/backend/      @coreinfra-labs/backend
+
+# Frontend
+
+apps/frontend/     @coreinfra-labs/frontend
+
+
+Now:
+
+Plain Text
+Senior Backend Engineer
+↓
+Changes deploy.yml
+↓
+PR created
+↓
+Platform Team approval required
+ 
+Show more lines
+Even if the Senior Engineer has Write access, GitHub will require approval from the designated code owners.
+
+maintainers
+Show more lines
+
+Where:
+
+maintainers → merge application code
+platform → own infrastructure and pipelines
+security → own security rules and policies
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Better Team Structure
