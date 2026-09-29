@@ -402,4 +402,16 @@ curl -H "Authorization: token $GITHUB_APP_TOKEN" https://api.github.com/user
 
 # Test Argo CD token
 argocd app list --server $ARGOCD_SERVER --auth-token $ARGOCD_AUTH_TOKEN
+
+My recommendation
+
+For your repos, use this exact setup:
+
+Use GitHub App for app repo → manifest repo access
+Use GitHub OIDC for AWS access
+Use short-lived Argo CD token for Argo CD API access
+Keep all long-lived credentials out of repo workflows unless absolutely necessary
+This is the best option.
+
+Concrete recommendation for your case
 ```
