@@ -65,6 +65,21 @@ platform → own infrastructure and pipelines
 security → own security rules and policies
 
 
+I would recommend:
+For Ruleset:
+Merge Queue: Enabled ✅
+Merge Method: Squash
+Build Concurrency: 3-5
+Minimum Group Size: 1
+Maximum Group Size: 2
+Wait Time: 5
+Require All Queue Entries Pass Checks: ✅
+Status Timeout: 60
+Show more lines
+
+This prevents senior developers, maintainers, or anyone else from merging code that has not passed the required CI/CD, security, and quality gates. The merge queue acts as the final safety gate before code reaches main.
+
+
 
 
 
