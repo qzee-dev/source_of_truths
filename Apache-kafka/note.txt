@@ -1,0 +1,142 @@
+APache Kafka:
+Apache Kafka is an open-source distributed event streaming platform used to exchange data asynchronously between applications and services.
+It allows producers to publish events and consumers to process them independently, making systems more scalable, reliable, and loosely coupled.
+
+Kafka use cases.
+
+1. E-Commerce Order Processing
+Customer Places Order
+        |
+        v
+      Kafka
+   /     |     \
+  v      v      v
+Payment Inventory Email
+Service Service  Service
+
+2. Banking Transactions
+Customer Transfer
+        |
+        v
+      Kafka
+   /     |      \
+  v      v       v
+Account Fraud   Notification
+Update  Check   Service
+
+3. Healthcare
+Patient Record Updated
+          |
+          v
+        Kafka
+     /     |      \
+    v      v       v
+Hospital Analytics Billing
+System   Service   Service
+
+4. Real-Time Fraud Detection
+Credit Card Transaction
+           |
+           v
+         Kafka
+      /      \
+     v        v
+Fraud      Payment
+Engine     Processing
+
+
+5. Automotive / Connected Vehicles
+Vehicle Sensor Data
+         |
+         v
+       Kafka
+   /      |       \
+  v       v        v
+Traffic  Hazard   Fleet
+Alerts   Alerts   Monitoring
+
+6. Log Aggregation & Monitoring
+Applications
+|
+v
+Kafka
+/ | \
+v v v
+ELK Grafana SIEM
+Stack System Security
+Show more lines
+
+Generic Kafka Architecture
+Plain Text
+Producer
+|
+v
++--------+
+| Kafka |
++--------+
+|
++------------+
+|            |
+v            v
+Consumer A Consumer B
+
+Producer
+A Producer is an application that sends (publishes) events/messages to Kafka.
+
+Example:
+
+
+Order Service
+      |
+      v
+Order Created
+
+Producer
+   |
+   v
++--------+
+| Kafka  |
++--------+
+
+The Order Service publishes the "Order Created" event to Kafka.
+
+Consumer
+
+A Consumer is an application that reads events from Kafka.
+
+Example:
+
+Order Created
+|
+v
+Kafka
+/            \
+v              v
+Payment Email   Service Service
+
+Payment Service reads the event.
+Email Service reads the same event.
+
+Broker: a server with kafka process running on it. Such server has local storage. In a single Kafka clusters there are usually multiple brokers.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
