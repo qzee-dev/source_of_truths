@@ -119,6 +119,117 @@ Email Service reads the same event.
 
 Broker: a server with kafka process running on it. Such server has local storage. In a single Kafka clusters there are usually multiple brokers.
 
+Kafka Cluster:
+
+In Apache Kafka, clusters are groups of brokers (or servers), since kafka is distributed messaging platform, a cluster must have a minimum of 3 Kafka Broker (or Kafka Server).
+
+Kafka Cluster
++-------------------------------------+
+| |
+| Broker 1| Broker 2| Broker 3 | 
+| +----------+----------+ |
++-------------------------------------+
+
+Kafka Broker (Kafka Server)
+Kafka Broker (Kafka server), as the name suggests, it acts as moderator between the producer and consumer.
+
++------------------+       +------------------+       +------------------+
+|  Kafka Producer  | ----> |   Kafka Broker   | ----> |  Kafka Consumer  |
++------------------+       +------------------+       +------------------+
+
+
+
++------------------+
+|  Kafka Producer  |
++------------------+
+          |
+          v
++------------------+
+|   Kafka Broker   |
+| (Kafka Server)   |
++------------------+
+      /      \
+     /        \
+    v          v
++-----------+ +-----------+
+| Consumer A| | Consumer B|
++-----------+ +-----------+
+
+Kafka Broker (Kafka Server) acts as an intermediary between producers and consumers. Producers publish events to the broker, the broker stores the events in topics, and consumers read the events from the broker when they are ready.
+
+
+A Kafka Topic:
+is a logical channel used to organize and store related events. Producers publish messages to topics, and consumers subscribe to topics to read those messages.
+
+More Realistic Example
+
+                  +------------------+
+                  | Kafka Producer   |
+                  +------------------+
+                           |
+                           v
+                 +--------------------+
+                 |      Kafka         |
+                 +--------------------+
+                   |              |
+                   |              |
+                   v              v
+            +-------------+  +--------------+
+            | Orders      |  | Payments     |
+            | Topic       |  | Topic        |
+            +-------------+  +--------------+
+                   |              |
+                   v              v
+            +-------------+  +--------------+
+            | Order       |  | Payment      |
+            | Consumer    |  | Consumer     |
+            +-------------+  +--------------+
+
+Here:
+Producer writes events to Kafka.
+Orders Topic stores order events.
+Payments Topic stores payment events.
+Order Consumer reads order events.
+Payment Consumer reads payment events
+
+
+Kafka Partitions
+Kafka Topics are split into number of topics, the messages sent by the producer are stored in these partitions. Due to there is need to mention the number of partitions required while creating the topic.
+
++----------------+          +----------------------------------+          +----------------+
+| Kafka Producer | -------> |          Kafka Broker            | -------> | Kafka Consumer |
++----------------+          |----------------------------------|          +----------------+
+                            |                                  |
+                            |  Topic 1                         |
+                            |  ├─ Partition 1                  |
+                            |  ├─ Partition 2                  |
+                            |  └─ Partition 3                  |
+                            |                                  |
+                            |  Topic 2                         |
+                            |  ├─ Partition 1                  |
+                            |  ├─ Partition 2                  |
+                            |  └─ Partition 3                  |
+                            |                                  |
+                            +----------------------------------+
+                     Producer → Broker → Topic → Partition → Consumer
+
+Show more lines
+Producer sends messages.
+Broker receives and stores messages.
+Topics organize similar messages.
+Partitions split a topic for scalability and parallel processing.
+Consumers read messages from the topic partitions.
+
+
+A Kafka Producer sends messages to a Kafka Broker, where the messages are stored in topics. Kafka Consumers subscribe to these topics and read the messages independently. The broker acts as a middleman, ensuring producers and consumers remain loosely coupled and can operate asynchronously.
+Sources
+
+
+
+
+
+
+
 
 
 
