@@ -1,0 +1,13 @@
+                    Kafka
+                      │
+       ┌──────────────┼──────────────┐
+       │              │              │
+       ▼              ▼              ▼
+payment-service   transaction     wallet
+  PRODUCER         PRODUCER +     PRODUCER +
+                   CONSUMER        CONSUMER
+       │
+       │
+       ├──────── fraud-service       CONSUMER
+       │
+       └──────── notification-service CONSUMER
