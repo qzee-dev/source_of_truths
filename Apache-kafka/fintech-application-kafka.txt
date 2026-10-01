@@ -41,3 +41,362 @@ transaction.created
         ▼
 fraud-service
  
+===============================================
+investigation
+======================================
+I'll continue the investigation by examining the shared Kafka library and the consumer implementations.Now I have comprehensive information about the Kafka architecture. Let me create a detailed investigation report.
+
+---
+
+## KAFKA EVENT ARCHITECTURE INVESTIGATION: fintech-platform
+
+Based on a complete code inspection of the Coreinfra-Labs/fintech-platform repository, here is the definitive Kafka architecture analysis:
+
+---
+
+## 1. Kafka Architecture Summary
+
+The fintech platform implements a **partially event-driven microservices architecture** using Kafka for inter-service communication. However, the implementation is **incomplete and inconsistent**:
+
+- **Transaction flow**: Initiated via REST API → Published to Kafka topic `transactions` → Consumed by multiple services
+- **Event propagation**: `transaction-service` publishes to `transaction-completed` topic after ledger settlement
+- **Kafka usage is asymmetric**: Some services only produce, some only consume; wallet-service has both capabilities but doesn't use them
+- **Payment and wallet services do NOT participate in Kafka event flows** despite having Kafka infrastructure initialized
+- **HTTP/REST remains the primary inter-service communication mechanism** (e.g., transaction-service calls fraud-service via HTTP; notification-service has no actual event handling)
+
+---
+
+## 2. Complete Producer → Topic → Consumer Matrix
+
+| Producer Service | Topic | Consumer Service | Consumer Group | Status | Evidence |
+|---|---|---|---|---|---|
+| transaction-service | `transactions` | transaction-service | `transaction-service-group` | **CONFIRMED** | `/services/transaction-service/src/routes/transaction.js:61` publishes; `/services/transaction-service/src/consumers/transactionConsumer.js:8` subscribes |
+| transaction-service | `transactions` | fraud-service | `fraud-service-group` | **CONFIRMED** | `/services/transaction-service/src/routes/transaction.js:61` publishes; `/services/fraud-service/src/consumers/fraudConsumer.js:6` subscribes |
+| transaction-service | `transaction-completed` | notification-service | `notification-service-group` | **CONFIRMED** | `/services/transaction-service/src/consumers/transactionConsumer.js:46` publishes; `/services/notification-service/src/consumers/notificationConsumer.js:7` subscribes |
+| payment-service | (none) | — | — | **PRODUCER ONLY** | `/services/payment-service/src/index.js:40-46` initializes Kafka but only creates producer, never publishes |
+| wallet-service | (none) | — | — | **PRODUCER ONLY** | `/services/wallet-service/src/index.js:29-32` initializes Kafka with both producer/consumer but neither is used |
+
+---
+
+## 3. Service-by-Service Kafka Map
+
+### payment-service
+- **Kafka Role**: Producer (initialized but unused)
+- **Status**: ❌ **NOT ACTUALLY USING KAFKA**
+- **Produces**: None (despite having producer)
+- **Consumes**: None
+- **Kafka Initialization**: `/services/payment-service/src/index.js:40-46`
+  ```javascript
+  const kafkaService = new KafkaService('payment-service');
+  await kafkaService.connect();
+  ```
+- **Problem**: KafkaService created but never referenced again. No publishEvent calls exist.
+- **Communication**: REST-only (calls NIBSS mock at `/api/payment/bank-transfer`, `/api/payment/status/:reference`, `/api/payment/validate-account`)
+- **Evidence**: `/services/payment-service/src/routes/payment.js:31-99` — all integration via axios to NIBSS mock; zero Kafka usage
+
+### transaction-service
+- **Kafka Role**: Producer + Consumer (bidirectional)
+- **Status**: ✅ **ACTIVELY USING KAFKA**
+- **Produces**:
+  - **Topic**: `transactions`
+    - **When**: After transaction record created via POST `/api/transaction/create`
+    - **Payload**: `{ transactionId, type, amount, sourceWalletId, destinationWalletId, status, timestamp }`
+    - **Code**: `/services/transaction-service/src/routes/transaction.js:61-69`
+  - **Topic**: `transaction-completed`
+    - **When**: After ledger recording and transaction status updated to COMPLETED
+    - **Payload**: `{ transactionId, status: 'COMPLETED' }`
+    - **Code**: `/services/transaction-service/src/consumers/transactionConsumer.js:46-49`
+- **Consumes**:
+  - **Topic**: `transactions`
+    - **Consumer Group**: `transaction-service-group`
+    - **Handler**: `/services/transaction-service/src/consumers/transactionConsumer.js:8-55`
+    - **Actions**: Fetches transaction, calls ledger service via HTTP, updates status, publishes completion event
+- **Trigger**: REST API call to `/api/transaction/create` → immediate Kafka publish → consumer processes → HTTP call to ledger → publishes completion
+- **Critical Issue**: Uses shared-libs KafkaService for routes but has its own local KafkaService in `/services/transaction-service/src/services/kafka.js` (duplicated code, never used)
+
+### wallet-service
+- **Kafka Role**: Producer + Consumer (initialized but unused)
+- **Status**: ❌ **KAFKA INITIALIZED BUT NOT USED**
+- **Produces**: None (no publishEvent calls anywhere)
+- **Consumes**: None (no subscribeToTopic calls anywhere)
+- **Kafka Initialization**: `/services/wallet-service/src/index.js:29-32`
+  ```javascript
+  const kafkaService = new KafkaService('wallet-service');
+  await kafkaService.connect();
+  ```
+- **Storage**: kafkaService created but never assigned to app context or global variable — reference lost
+- **Communication**: REST-only (wallet creation, balance updates via HTTP endpoints at `/api/wallet/create`, `/api/wallet/:walletId`, `/api/wallet/:walletId/update-balance`)
+- **Evidence**: `/services/wallet-service/src/routes/wallet.js` — no Kafka code anywhere; kafkaService initialized in index.js but not injected into routes
+
+### fraud-service
+- **Kafka Role**: Consumer-only
+- **Status**: ✅ **KAFKA SUBSCRIBED (but handler incomplete)**
+- **Produces**: None
+- **Consumes**:
+  - **Topic**: `transactions`
+    - **Consumer Group**: `fraud-service-group`
+    - **Handler**: `/services/fraud-service/src/consumers/fraudConsumer.js:5-14`
+    - **Current Implementation**: Logs transaction ID only; actual fraud check logic noted as "TODO" — **NO ACTION TAKEN**
+    - **Code**: 
+      ```javascript
+      await kafkaService.subscribeToTopic('transactions', async (data) => {
+        logger.info(`Checking transaction for fraud: ${data.transactionId}`);
+        // Fraud check logic will be handled by API calls
+      });
+      ```
+- **Problem**: Consumer is wired but has no business logic. Comment says "will be handled by API calls" (implying REST fallback planned but not implemented)
+- **No HTTP Integration**: Unlike transaction-service, fraud-service never calls another service—it just logs and returns
+- **Evidence**: `/services/fraud-service/src/index.js:34` starts consumer; `/services/fraud-service/src/consumers/fraudConsumer.js:6` subscribes to `transactions`
+
+### notification-service
+- **Kafka Role**: Consumer-only
+- **Status**: ✅ **KAFKA SUBSCRIBED (but handler is a stub)**
+- **Produces**: None
+- **Consumes**:
+  - **Topic**: `transaction-completed`
+    - **Consumer Group**: `notification-service-group`
+    - **Handler**: `/services/notification-service/src/consumers/notificationConsumer.js:5-15`
+    - **Current Implementation**: Logs notification ID only; actual send logic noted as "TODO"
+    - **Code**:
+      ```javascript
+      await kafkaService.subscribeToTopic('transaction-completed', async (data) => {
+        logger.info(`Sending notification for transaction: ${data.transactionId}`);
+        // Notification logic will be triggered by events
+      });
+      ```
+- **Problem**: Consumer subscribed but empty handler. No email/SMS actually sent on transaction completion.
+- **Routes exist but are unused**: `/api/notification/email` and `/api/notification/sms` endpoints exist in routes but are never called by Kafka events
+- **Evidence**: `/services/notification-service/src/index.js:29` starts consumer; `/services/notification-service/src/consumers/notificationConsumer.js:7` subscribes to `transaction-completed`
+
+---
+
+## 4. End-to-End Event Flows
+
+### Flow 1: Transaction Processing (CONFIRMED, Partially Implemented)
+
+```
+POST /api/transaction/create
+    ↓
+transaction-service routes/transaction.js:25-86
+    ↓
+Create Transaction record in DB
+    ↓
+kafkaService.publishEvent('transactions', {...})
+[transaction-service/src/routes/transaction.js:61]
+    ↓
+Kafka Topic: 'transactions'
+    ├─→ transaction-service consumer
+    │   [src/consumers/transactionConsumer.js:8]
+    │       ↓
+    │   Fetch Transaction from DB
+    │       ↓
+    │   Call Ledger Service (HTTP)
+    │   axios.post('http://localhost:3005/api/ledger/record', {...})
+    │   [Line 23]
+    │       ↓ [PROBLEM: Port 3005 is Fraud-Service, not Ledger! Likely a BUG]
+    │       ↓
+    │   Update Transaction to COMPLETED
+    │       ↓
+    │   kafkaService.publishEvent('transaction-completed', {...})
+    │   [Line 46]
+    │       ↓
+    ├─→ fraud-service consumer
+    │   [src/consumers/fraudConsumer.js:6]
+    │       ↓
+    │   Log only (no action)
+    │       ↓
+    └─→ Kafka Topic: 'transaction-completed'
+            ↓
+        notification-service consumer
+        [src/consumers/notificationConsumer.js:7]
+            ↓
+        Log only (no notification sent)
+```
+
+### Flow 2: Missing/Unimplemented Flows
+
+- **Payment-Service → Kafka**: Not wired. Bank transfers go directly to NIBSS mock; no Kafka event published
+- **Wallet-Service → Kafka**: Not wired. Wallet creation/balance updates are REST-only
+- **Fraud Detection**: Subscribed to transactions but no actual fraud detection logic — just a log statement
+- **Notifications**: Subscribed to transaction-completed but no actual email/SMS sent
+
+---
+
+## 5. HTTP vs Kafka Communication
+
+| Flow | Primary | Secondary | Status |
+|---|---|---|---|
+| Transaction Creation | REST | Kafka (event publish) | ✅ Hybrid |
+| Transaction Processing | Kafka (event) | HTTP to Ledger | ✅ Hybrid |
+| Fraud Detection | Kafka (event sub) | None | ⚠️ Kafka only but stub |
+| Notifications | Kafka (event sub) | None (should be Nodemailer/Twilio) | ⚠️ Kafka only but stub |
+| Bank Transfers | REST | None | ❌ No Kafka |
+| Wallet Operations | REST | None | ❌ No Kafka |
+| Account Validation | REST (NIBSS mock) | None | ❌ No Kafka |
+
+---
+
+## 6. Problems & Suspicious Areas
+
+### 🔴 CRITICAL ISSUES
+
+**1. Ledger Service HTTP Target Error**
+- **File**: `services/transaction-service/src/consumers/transactionConsumer.js:23`
+- **Code**: `axios.post('http://localhost:3005/api/ledger/record', {...})`
+- **Problem**: Port 3005 is the **Fraud-Service**, not a Ledger Service
+- **Impact**: Transaction settlement will fail silently or hit wrong service
+- **Expected**: Should call a ledger-service (no such service exists in the repo)
+- **Status**: **BUG** — transactions will fail to settle
+
+**2. Duplicate Kafka Service Implementations**
+- **Locations**:
+  - `libs/shared-libs/services/kafka.js` — shared implementation
+  - `services/payment-service/src/services/kafka.js` — local copy (never used)
+  - `services/wallet-service/src/services/kafka.js` — local copy (never used)
+  - `services/transaction-service/src/services/kafka.js` — local copy (never used)
+  - `services/fraud-service/src/index.js:4` — uses shared-libs version
+  - `services/notification-service/src/index.js:4` — uses shared-libs version
+- **Problem**: Routes use shared-libs KafkaService; consumers use different approach
+- **Code mixing**: `transaction.js:9` creates `new KafkaService(...)` from shared-libs inside route handler (should be singleton)
+- **Impact**: Multiple KafkaService instances, possible connection leaks
+
+**3. Kafka Initialized But Never Used (wallet-service, payment-service)**
+- **File**: `services/wallet-service/src/index.js:30`
+- **Code**: 
+  ```javascript
+  const kafkaService = new KafkaService('wallet-service');
+  await kafkaService.connect();
+  ```
+- **Problem**: Variable assigned to `startServer()` scope, never exported or injected; routes never receive it
+- **Impact**: Resource leak; Kafka consumer/producer connections open but unused
+- **Evidence**: Routes in `services/wallet-service/src/routes/wallet.js` have zero Kafka imports/calls
+
+**4. Incomplete Consumer Implementations**
+- **fraud-service**: Receives `transactions` topic but only logs; no fraud checking happens
+- **notification-service**: Receives `transaction-completed` topic but only logs; no email/SMS sent
+- **File**: `services/fraud-service/src/consumers/fraudConsumer.js:8-10` — comment says "Fraud check logic will be handled by API calls" (incomplete)
+- **File**: `services/notification-service/src/consumers/notificationConsumer.js:9-10` — comment says "Notification logic will be triggered by events" (incomplete)
+- **Impact**: Events published to Kafka are lost; no downstream action taken
+
+**5. Kafka KafkaService Constructor Called Inside Route Handler**
+- **File**: `services/transaction-service/src/routes/transaction.js:9`
+- **Code**: `const kafkaService = new KafkaService('transaction-service', 'transaction-service-group');`
+- **Problem**: KafkaService instance created at module load time; `connect()` never called in this context
+- **Impact**: Kafka producer in routes is initialized without connection; `publishEvent()` will fail
+- **Expected**: Should use injected/singleton instance or call `await kafkaService.connect()` in index.js and pass reference
+
+### 🟡 WARNINGS
+
+**6. Kafka Brokers Hardcoded to localhost:9092**
+- **File**: Multiple — `libs/shared-libs/services/kafka.js:12`, local implementations
+- **Code**: `brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(',')`
+- **Problem**: Falls back to localhost if env var not set (only Docker Compose sets it correctly)
+- **Impact**: Local dev will fail if Kafka isn't at localhost:9092
+
+**7. Consumer Subscription Called Without Await in Proper Context**
+- **File**: `services/transaction-service/src/index.js:35`
+- **Code**: `await startTransactionConsumer(kafkaService);`
+- **Function**: `startTransactionConsumer()` calls `kafkaService.subscribeToTopic()` which calls `consumer.run()` (blocking operation)
+- **Problem**: `consumer.run()` returns a Promise that never resolves (it's a long-running loop); server startup might hang
+- **Impact**: Race condition — server may listen before consumer fully subscribed, or never listen at all
+
+**8. Transaction Consumer Calls Wrong Port for Ledger**
+- **File**: `services/transaction-service/src/consumers/transactionConsumer.js:23`
+- **Code**: `await axios.post('http://localhost:3005/api/ledger/record', {...})`
+- **Port 3005**: Fraud-Service runs here
+- **Expected**: A Ledger-Service (does not exist in this repo)
+- **Impact**: **Every transaction will fail when consumer processes it**
+
+**9. No Kafka Topic Pre-Creation or Schema Definition**
+- **Problem**: Topics `transactions` and `transaction-completed` are auto-created by KafkaJS on first publish (broker default)
+- **Risk**: No guaranteed partition count, replication factor, retention policy, schema validation
+- **Impact**: Race conditions; out-of-order message consumption possible
+
+**10. Error Handling in Consumer is Incomplete**
+- **File**: `services/transaction-service/src/consumers/transactionConsumer.js:52-54`
+- **Code**: 
+  ```javascript
+  } catch (error) {
+    logger.error('Transaction processing error:', error);
+  }
+  ```
+- **Problem**: Error logged but not handled — message not requeued or sent to dead-letter queue
+- **Impact**: Failed transactions silently dropped from Kafka
+
+---
+
+## 7. Evidence
+
+### Kafka Initialization Across Services
+
+| Service | File | Line | Kafka Role | Status |
+|---|---|---|---|---|
+| **transaction-service** | `src/index.js` | 30 | Producer + Consumer | ✅ Used |
+| **transaction-service** | `src/routes/transaction.js` | 9 | Producer (routes) | ✅ Used (but unconnected) |
+| **payment-service** | `src/index.js` | 41 | Producer | ❌ Created, never used |
+| **wallet-service** | `src/index.js` | 30 | Producer + Consumer | ❌ Created, never used |
+| **fraud-service** | `src/index.js` | 30 | Consumer | ⚠️ Subscribed but stub handler |
+| **notification-service** | `src/index.js` | 25 | Consumer | ⚠️ Subscribed but stub handler |
+
+### Topic Publishing Locations
+
+| Topic | Publisher | File | Line | Payload |
+|---|---|---|---|---|
+| `transactions` | transaction-service | `services/transaction-service/src/routes/transaction.js` | 61 | `{ transactionId, type, amount, sourceWalletId, destinationWalletId, status, timestamp }` |
+| `transaction-completed` | transaction-service | `services/transaction-service/src/consumers/transactionConsumer.js` | 46 | `{ transactionId, status: 'COMPLETED' }` |
+
+### Topic Subscription Locations
+
+| Topic | Subscriber | Consumer Group | File | Line | Handler |
+|---|---|---|---|---|---|
+| `transactions` | transaction-service | `transaction-service-group` | `services/transaction-service/src/consumers/transactionConsumer.js` | 8 | Fetch transaction, call ledger, update status |
+| `transactions` | fraud-service | `fraud-service-group` | `services/fraud-service/src/consumers/fraudConsumer.js` | 6 | Log only (stub) |
+| `transaction-completed` | notification-service | `notification-service-group` | `services/notification-service/src/consumers/notificationConsumer.js` | 7 | Log only (stub) |
+
+### Kafka Configuration
+
+| Key | Value | Source |
+|---|---|---|
+| Brokers | `kafka:29092` (Docker) or `localhost:9092` (local) | `docker-compose.yaml:133,157,181,206,228` or code default |
+| Zookeeper | `zookeeper:2181` | `docker-compose.yaml:60` |
+| Kafka Version | Confluent 7.5.0 | `docker-compose.yaml:54` |
+| UI | Kafka UI on port 8080 | `docker-compose.yaml:79-91` |
+
+### KafkaService Shared Library
+
+**File**: `libs/shared-libs/services/kafka.js`
+
+**Methods**:
+- `constructor(serviceName, groupId = null)` — Initializes Kafka client
+- `async connect()` — Connects producer and optionally consumer (if groupId provided)
+- `async disconnect()` — Gracefully disconnects
+- `async publishEvent(topic, message)` — Sends message to topic
+- `async subscribeToTopic(topic, callback)` — Subscribes to topic and runs consumer loop
+
+**Key Issue**: `subscribeToTopic()` calls `consumer.run()` which is blocking; does not return until consumer stops
+
+---
+
+## 8. Summary Table: Kafka Implementation Status
+
+| Service | Kafka Initialized | Producer Used | Consumer Used | Topics | Issues |
+|---|---|---|---|---|---|
+| **payment-service** | ✅ | ❌ | ❌ | None | Resource leak; never used |
+| **transaction-service** | ✅ | ✅ | ✅ | `transactions`, `transaction-completed` | Unconnected producer in routes; wrong ledger endpoint |
+| **wallet-service** | ✅ | ❌ | ❌ | None | Resource leak; never used |
+| **fraud-service** | ✅ | ❌ | ⚠️ | `transactions` | Stub consumer; no fraud logic |
+| **notification-service** | ✅ | ❌ | ⚠️ | `transaction-completed` | Stub consumer; no email/SMS sent |
+
+---
+
+## 9. Recommended Actions
+
+1. **FIX CRITICAL**: Change `http://localhost:3005` to correct ledger-service URL in `transactionConsumer.js:23` or create missing ledger-service
+2. **FIX CRITICAL**: Implement actual fraud-check logic in `fraudConsumer.js` or remove stub
+3. **FIX CRITICAL**: Implement actual email/SMS notification logic in `notificationConsumer.js` or remove stub
+4. **REFACTOR**: Move KafkaService instantiation from route handler (`transaction.js:9`) to singleton in `index.js` and inject into routes
+5. **CLEANUP**: Remove unused Kafka initialization from `payment-service` and `wallet-service` or implement actual event publishing
+6. **CLEANUP**: Remove duplicate local KafkaService files; use shared-libs version everywhere
+7. **IMPROVE**: Add topic pre-creation, partition configuration, and schema validation
+8. **IMPROVE**: Add dead-letter queue for failed message processing
+9. **TEST**: Add integration tests to verify end-to-end event flow
