@@ -400,3 +400,223 @@ Kafka Topic: 'transactions'
 7. **IMPROVE**: Add topic pre-creation, partition configuration, and schema validation
 8. **IMPROVE**: Add dead-letter queue for failed message processing
 9. **TEST**: Add integration tests to verify end-to-end event flow
+
+
+==================================================
+investigation recommendation
+===============================================
+Use a prompt that clearly defines the implementation scope, repository/ref, safety requirements, and expected validation. For the full recommendation set, you can give me this:
+
+```text
+Implement the Kafka architecture fixes identified in the previous investigation for:
+
+https://github.com/Coreinfra-Labs/fintech-platform/tree/develop
+
+Before modifying anything, inspect the current repository state and verify all relevant files. Work only on a new branch named:
+
+fix/kafka-event-architecture
+
+Do not modify the develop branch directly.
+
+Implement the following:
+
+1. Fix transaction-service Kafka initialization:
+   - Use one shared KafkaService instance.
+   - Connect it during application startup.
+   - Inject or otherwise safely share the connected instance with the transaction routes and consumers.
+   - Do not instantiate an unconnected KafkaService inside route modules.
+   - Ensure the HTTP server still starts correctly while the Kafka consumer runs.
+
+2. Fix the transaction processing HTTP integration:
+   - Inspect the repository to determine whether a real ledger service or ledger endpoint exists.
+   - Do not assume that port 3005 is a ledger service.
+   - If no ledger service exists, do not silently route requests to fraud-service.
+   - Use a configuration variable such as LEDGER_SERVICE_URL only if a valid ledger implementation exists.
+   - If the ledger functionality is not implemented in this repository, preserve the current behavior as safely as possible and document the limitation rather than inventing a service.
+
+3. Implement or complete fraud event processing:
+   - Consume the `transactions` topic using the existing fraud-service consumer group unless the code proves another group is required.
+   - Trace the existing fraud rules, models, services, and API behavior before implementing logic.
+   - Ensure the consumer performs the actual fraud check or invokes the existing fraud application service.
+   - Define the behavior for approved, rejected, and failed fraud checks.
+   - Do not invent business rules without first checking existing code and configuration.
+
+4. Implement or complete notification event processing:
+   - Consume the `transaction-completed` topic.
+   - Trace the existing email, SMS, notification routes, and service implementations.
+   - Invoke the existing notification service logic after receiving the event.
+   - Preserve the existing Nodemailer/Twilio/SendGrid configuration conventions.
+   - Ensure failures are logged and handled safely.
+
+5. Remove or consolidate duplicate Kafka implementations:
+   - Inspect all KafkaService files.
+   - Prefer the shared implementation in `libs/shared-libs/services/kafka.js` unless there is a repository-specific reason not to.
+   - Remove unused duplicate implementations only if doing so will not break imports.
+   - Preserve the public API or update all call sites consistently.
+
+6. Clean up unused Kafka initialization:
+   - For payment-service and wallet-service, either:
+     a. implement their intended Kafka usage based on actual repository behavior, or
+     b. remove Kafka initialization if no event flow requires it.
+   - Do not claim that a service produces an event unless there is an actual publishEvent/producer.send call.
+   - Do not add speculative topics.
+
+7. Improve Kafka reliability:
+   - Add graceful shutdown for Kafka producers and consumers.
+   - Make consumer startup non-blocking with respect to the HTTP server.
+   - Preserve message processing errors and avoid silently losing failed messages.
+   - Add appropriate logging.
+   - Avoid creating duplicate consumers or producers.
+   - Keep consumer group IDs explicit and configurable only where appropriate.
+
+8. Add topic constants or a shared topic registry:
+   - Centralize `transactions` and `transaction-completed`.
+   - Update all producers and consumers to use the shared constants.
+   - Do not rename topics unless required for correctness.
+   - Check for topic-name mismatches before changing anything.
+
+9. Add or update tests:
+   - Test topic constants.
+   - Test producer payloads.
+   - Test consumer subscriptions and group IDs.
+   - Test fraud consumer behavior.
+   - Test notification consumer behavior.
+   - Test Kafka initialization and shutdown where practical.
+   - Mock Kafka, HTTP, database, email, and SMS dependencies appropriately.
+   - Do not require a live Kafka broker for unit tests.
+
+10. Review Docker and environment configuration:
+    - Verify KAFKA_BROKERS works inside Docker Compose and during local development.
+    - Add only necessary environment variables.
+    - Add LEDGER_SERVICE_URL only if supported by an actual ledger service.
+    - Do not commit secrets.
+
+Implementation requirements:
+
+- Inspect the entire repository before editing.
+- Follow the existing JavaScript/CommonJS/Nx conventions.
+- Do not make assumptions based only on KafkaService classes.
+- Preserve existing API behavior unless a change is required to fix a confirmed bug.
+- Do not create a new service unless explicitly necessary and justified.
+- Do not modify unrelated files.
+- Do not commit secrets or generated files.
+- Add comments only where they explain non-obvious behavior.
+
+Validation requirements:
+
+Run the relevant tests, lint, typecheck, and build commands available in the repository. At minimum, run the appropriate Nx targets for the changed services and shared library.
+
+After implementation, provide:
+
+1. Summary of changes.
+2. Files changed.
+3. Final Kafka producer/topic/consumer matrix.
+4. Consumer group IDs.
+5. Payload formats.
+6. HTTP versus Kafka flow after the changes.
+7. Tests and commands run.
+8. Any remaining limitations or risks.
+9. A list of changes that should be reviewed manually.
+
+Do not merge or modify the develop branch directly. Create the branch and prepare the changes for review.
+```
+
+If you want to implement the recommendations incrementally, use smaller prompts.
+
+### Fix only transaction-service Kafka wiring
+
+```text
+In Coreinfra-Labs/fintech-platform, create a new branch named fix/transaction-kafka-wiring from develop.
+
+Fix the transaction-service Kafka lifecycle:
+
+- Inspect transaction-service, shared-libs, routes, consumers, and tests first.
+- Use one connected KafkaService instance.
+- Remove the unconnected KafkaService created inside transaction routes.
+- Ensure the producer used by POST /api/transaction/create is connected.
+- Ensure the transaction consumer starts correctly without preventing the HTTP server from listening.
+- Add graceful shutdown.
+- Preserve the `transactions` and `transaction-completed` topic names and the existing payloads.
+- Preserve `transaction-service-group`.
+- Add or update tests with Kafka mocked.
+- Run relevant tests, lint, and build commands.
+- Do not modify unrelated services.
+- Do not merge the branch.
+
+Report the changed files, final lifecycle design, and validation results.
+```
+
+### Fix only fraud processing
+
+```text
+In Coreinfra-Labs/fintech-platform, create a branch named fix/fraud-kafka-consumer from develop.
+
+Implement the fraud-service consumer for the existing `transactions` Kafka topic.
+
+Before editing, inspect:
+- fraud-service consumers
+- fraud-service routes
+- fraud-service application services
+- fraud models
+- fraud configuration and environment variables
+- shared KafkaService
+- transaction-service producer payload
+
+Use consumer group `fraud-service-group` unless repository evidence requires otherwise.
+
+The consumer must:
+- parse and validate the existing transaction payload
+- invoke existing fraud business logic where available
+- define approved/rejected/failed behavior based on existing code
+- log failures without silently hiding them
+- avoid inventing unsupported fraud rules
+- include unit tests with Kafka and database dependencies mocked
+
+Do not change topic names or unrelated services. Run relevant tests and report remaining limitations.
+```
+
+### Fix only notification processing
+
+```text
+In Coreinfra-Labs/fintech-platform, create a branch named fix/notification-kafka-consumer from develop.
+
+Complete notification-service handling of the existing `transaction-completed` Kafka topic.
+
+Inspect the notification consumer, routes, notification services, email/SMS providers, environment configuration, and shared KafkaService before editing.
+
+Use consumer group `notification-service-group` unless repository evidence requires otherwise.
+
+The consumer must:
+- validate the transaction-completed payload
+- invoke existing notification logic
+- preserve configured provider behavior
+- avoid sending duplicate notifications where possible
+- handle provider failures safely
+- include unit tests with Kafka, email, and SMS dependencies mocked
+
+Do not invent new event types or rename the topic. Run relevant tests and report any provider/configuration limitations.
+```
+
+### Remove unused Kafka code only
+
+```text
+In Coreinfra-Labs/fintech-platform, create a branch named cleanup/unused-kafka-code from develop.
+
+Audit every Kafka-related file and call site.
+
+Remove or consolidate only Kafka code that is proven unused, including:
+- duplicate local KafkaService implementations
+- producer/consumer initialization with no reachable publish or subscribe call
+- unused imports and configuration
+
+Before deleting anything:
+- trace every import and call site
+- verify whether the code is used indirectly
+- preserve the shared KafkaService API
+- do not remove active producers or consumers
+- do not rename topics
+
+Add or update tests as needed, run lint/tests/build for affected projects, and report every removed file and why it was safe to remove.
+```
+
+The safest approach is to implement the transaction wiring first, then fraud processing, notification processing, cleanup, and finally reliability improvements.
