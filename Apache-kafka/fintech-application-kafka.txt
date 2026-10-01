@@ -11,3 +11,33 @@ payment-service   transaction     wallet
        ├──────── fraud-service       CONSUMER
        │
        └──────── notification-service CONSUMER
+
+to confirm who is a producer and a consumer to who 
+
+publishEvent(...)   and subscribeToTopic(...)
+
+
+For example, if you give me:
+
+// transaction-service
+await kafkaService.publishEvent('transaction.created', transaction);
+
+
+and
+
+// fraud-service
+await kafkaService.subscribeToTopic('transaction.created', callback);
+
+
+then I can definitively map:
+
+transaction-service
+        │
+        │ PRODUCES
+        ▼
+transaction.created
+        │
+        │ CONSUMES
+        ▼
+fraud-service
+ 
