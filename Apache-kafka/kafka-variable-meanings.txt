@@ -1,0 +1,61 @@
+Here is the plain-English translation of those Kafka variables.
+
+These are all broker startup settings for a Kafka node.
+
+- KAFKA_BROKER_ID
+  - “Give this Kafka broker its unique ID.”
+  - Example: broker 1, broker 2, broker 3
+  - Each broker in the cluster must have a different ID.
+
+- KAFKA_ZOOKEEPER_CONNECT
+  - “Tell Kafka where ZooKeeper is running.”
+  - Example: zookeeper:2181
+  - Kafka uses ZooKeeper for cluster metadata and coordination.
+
+- KAFKA_ADVERTISED_LISTENERS
+  - “Tell clients which address they should connect to.”
+  - Example: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://kafka:9092
+  - This tells producers/consumers how to reach the broker from inside Docker or from outside.
+
+- KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+  - “Map each listener name to a security protocol.”
+  - Example: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+  - Means:
+    - listener named PLAINTEXT uses plain text
+    - listener named PLAINTEXT_HOST also uses plain text
+
+- KAFKA_INTER_BROKER_LISTENER_NAME
+  - “Which listener should brokers use when talking to each other?”
+  - Example: PLAINTEXT
+  - So broker-to-broker traffic uses the PLAINTEXT listener.
+
+- KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+  - “How many replicas should the internal __consumer_offsets topic have?”
+  - Example: 1 in dev, 3 in production
+  - This protects consumer offset data.
+
+- KAFKA_DEFAULT_REPLICATION_FACTOR
+  - “If a topic is created without an explicit replication factor, use this default.”
+  - Example: 3
+  - In a cluster, topics are replicated across brokers.
+
+- KAFKA_AUTO_CREATE_TOPICS_ENABLE
+  - “Should Kafka automatically create topics when producers or consumers try to use them?”
+  - Example: "false"
+  - In this project, topics are created manually, so this is disabled.
+
+- KAFKA_LOG_RETENTION_HOURS
+  - “How long should Kafka keep log files before deleting them?”
+  - Example: 168 = 7 days
+  - This controls how long messages remain stored.
+
+- KAFKA_HEAP_OPTS
+  - “How much JVM heap memory should the Kafka broker use?”
+  - Example: "-Xms1g -Xmx2g"
+  - This sets minimum and maximum heap size for Kafka.
+
+In plain words, the snippet is saying:
+
+“Run a Kafka broker with ID 1, connect it to ZooKeeper at zookeeper:2181, advertise one internal and one external listener address, use plain text listeners, set replication to 1 for dev, disable automatic topic creation, keep logs for 7 days, and give the JVM 1GB minimum / 2GB maximum heap.”
+
+If you want, I can also translate the entire docker-compose Kafka block as a sentence-by-sentence configuration explanation.
