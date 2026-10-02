@@ -1,3 +1,14 @@
+#BEFORE CREATING A KAFKA:
+We need to identify the actual Kafka broker configuration, the topic names, the consumer group IDs, and understand which services produce messages to which topics and which services consume those messages from those topics.
+
+Better: exclude obvious noise
+#git grep -niE 'kafka|bootstrap.servers|bootstrap-server|group.id|groupId|topic|producer|consumer|KAFKA_' -- ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml'
+
+Also find the service structure
+git ls-files | grep -Ei 'docker-compose|dockerfile|\.env|application\.(yml|yaml|properties)|config|kafka|producer|consumer'
+
+
+
 Below are three ready-to-save scripts (and a short README) you can drop into the repo under scripts/ and run. They cover:
 
 - deploy-kafka-broker.sh — create and run a simple Docker-Compose stack (ZK + single Kafka broker) for dev/testing
