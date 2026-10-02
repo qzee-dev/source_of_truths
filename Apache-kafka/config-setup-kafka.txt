@@ -7,6 +7,8 @@ Better: exclude obvious noise
 Also find the service structure
 git ls-files | grep -Ei 'docker-compose|dockerfile|\.env|application\.(yml|yaml|properties)|config|kafka|producer|consumer'
 
+if consumer group is not subscribed to a topic, it has no data to read
+
 
 
 Below are three ready-to-save scripts (and a short README) you can drop into the repo under scripts/ and run. They cover:
