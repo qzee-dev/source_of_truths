@@ -1,0 +1,261 @@
+Below are three ready-to-save scripts (and a short README) you can drop into the repo under scripts/ and run. They cover:
+
+- deploy-kafka-broker.sh — create and run a simple Docker-Compose stack (ZK + single Kafka broker) for dev/testing
+- create-kafka-topics.sh — create the topics your project needs (main + DLQs), configurable for dev or prod
+- kafka-consumer-ops.sh — handy consumer-group admin operations (list, describe, reset offsets dry-run/execute)
+- README snippet with exact commands to run and examples (permissions, docker exec usage)
+
+Copy each script into scripts/<name>.sh, make them executable (chmod +x), and run as described.
+
+1) scripts/deploy-kafka-broker.sh
+Path: scripts/deploy-kafka-broker.sh
+Purpose: bring up a simple single-node Zookeeper+Kafka for local/dev use (does not change your project docker-compose.yaml). Usage: ./scripts/deploy-kafka-broker.sh up | down
+
+```bash
+#!/usr/bin/env bash
+# scripts/deploy-kafka-broker.sh
+# Usage: ./scripts/deploy-kafka-broker.sh up|down
+set -euo pipefail
+
+ACTION=${1:-up}
+OUTFILE="docker-compose.kafka.yml"
+
+cat > "$OUTFILE" <<'EOF'
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+    networks:
+      - kafka-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: "-Xms512m -Xmx2g"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    networks:
+      - kafka-network
+
+networks:
+  kafka-network:
+    driver: bridge
+EOF
+
+if [ "$ACTION" = "up" ]; then
+  echo "Starting Kafka stack using $OUTFILE"
+  docker-compose -f "$OUTFILE" up -d
+  echo "Kafka stack started"
+elif [ "$ACTION" = "down" ]; then
+  echo "Stopping Kafka stack defined in $OUTFILE"
+  docker-compose -f "$OUTFILE" down
+else
+  echo "Unknown action: $ACTION"
+  echo "Usage: $0 up|down"
+  exit 2
+fi
+
+echo "Note: This is a single-broker dev stack. For production use multi-broker deployments or an operator."
+```
+
+2) scripts/create-kafka-topics.sh
+Path: scripts/create-kafka-topics.sh
+Purpose: create the required topics. Configurable bootstrap and replication factor (defaults to dev-friendly single-broker values).
+
+```bash
+#!/usr/bin/env bash
+# scripts/create-kafka-topics.sh
+# Creates project topics. Usage:
+#   BOOTSTRAP=kafka:29092 ./scripts/create-kafka-topics.sh
+#   BOOTSTRAP=broker1:9092,broker2:9092 REPLICATION_FACTOR=3 ./scripts/create-kafka-topics.sh
+
+set -euo pipefail
+
+BOOTSTRAP="${BOOTSTRAP:-kafka:29092}"
+REPLICATION_FACTOR="${REPLICATION_FACTOR:-1}"   # 1 for dev; use 3 in production when you have 3 brokers
+PARTITIONS_MAIN="${PARTITIONS_MAIN:-6}"
+PARTITIONS_DLQ="${PARTITIONS_DLQ:-3}"
+
+echo "Bootstrap: $BOOTSTRAP"
+echo "Replication factor: $REPLICATION_FACTOR"
+echo "Partitions (main): $PARTITIONS_MAIN, (dlq): $PARTITIONS_DLQ"
+
+# Main topics (higher parallelism)
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic transactions --partitions "$PARTITIONS_MAIN" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=604800000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic transaction-completed --partitions "$PARTITIONS_MAIN" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=604800000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic payment-initiated --partitions "$PARTITIONS_MAIN" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=604800000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic payment-completed --partitions "$PARTITIONS_MAIN" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=604800000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic fraud-alert --partitions "$PARTITIONS_MAIN" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=604800000
+
+# DLQs (longer retention)
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic transaction-failed-dlq --partitions "$PARTITIONS_DLQ" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=2592000000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic payment-failed-dlq --partitions "$PARTITIONS_DLQ" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=2592000000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic fraud-check-dlq --partitions "$PARTITIONS_DLQ" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=2592000000
+kafka-topics --bootstrap-server "$BOOTSTRAP" --create --topic notification-dlq --partitions "$PARTITIONS_DLQ" --replication-factor "$REPLICATION_FACTOR" --config retention.ms=2592000000
+
+echo "Created topics. Current topic list:"
+kafka-topics --bootstrap-server "$BOOTSTRAP" --list
+```
+
+3) scripts/kafka-consumer-ops.sh
+Path: scripts/kafka-consumer-ops.sh
+Purpose: list groups, describe group, reset offsets (dry-run or execute). Example usage shown in header.
+
+```bash
+#!/usr/bin/env bash
+# scripts/kafka-consumer-ops.sh
+# Usage:
+#   ./scripts/kafka-consumer-ops.sh list               # list consumer groups
+#   ./scripts/kafka-consumer-ops.sh describe <group>  # describe group partitions/offsets
+#   DRY_RUN=1 ./scripts/kafka-consumer-ops.sh reset <group> --to-earliest --topic transactions  # dry-run
+#   ./scripts/kafka-consumer-ops.sh reset <group> --to-earliest --topic transactions  # execute reset
+
+set -euo pipefail
+
+BOOTSTRAP="${BOOTSTRAP:-kafka:29092}"
+CMD="${1:-list}"
+
+function usage() {
+  cat <<EOF
+Usage:
+  $0 list
+  $0 describe <group>
+  $0 reset <group> [--to-earliest | --to-latest | --to-datetime YYYY-mm-ddTHH:MM:SS] --topic <topic> [--execute]
+Examples:
+  $0 list
+  $0 describe transaction-service-group
+  DRY_RUN=1 $0 reset transaction-service-group --to-earliest --topic transactions
+EOF
+  exit 1
+}
+
+if [ "$CMD" = "list" ]; then
+  kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --list
+  exit 0
+fi
+
+if [ "$CMD" = "describe" ]; then
+  GROUP="$2"
+  kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --describe --group "$GROUP"
+  exit 0
+fi
+
+if [ "$CMD" = "reset" ]; then
+  if [ $# -lt 3 ]; then usage; fi
+  GROUP="$2"
+  shift 2
+  RESET_ARGS=()
+  TOPIC=""
+  EXECUTE=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to-earliest) RESET_ARGS+=(--to-earliest); shift ;;
+      --to-latest)   RESET_ARGS+=(--to-latest); shift ;;
+      --to-datetime) RESET_ARGS+=(--to-datetime "$2"); shift 2 ;;
+      --topic)       TOPIC="$2"; shift 2 ;;
+      --execute)     EXECUTE=1; shift ;;
+      *) echo "Unknown arg $1"; usage ;;
+    esac
+  done
+
+  if [ -z "$TOPIC" ]; then
+    echo "Missing --topic"
+    usage
+  fi
+
+  if [ $EXECUTE -eq 1 ]; then
+    kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --group "$GROUP" --reset-offsets "${RESET_ARGS[@]}" --execute --topic "$TOPIC"
+  else
+    echo "DRY RUN:"
+    kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --group "$GROUP" --reset-offsets "${RESET_ARGS[@]}" --dry-run --topic "$TOPIC"
+  fi
+  exit 0
+fi
+
+usage
+```
+
+4) README snippet (instructions)
+Path suggestion: scripts/README-KAFKA.md (or add to existing scripts/ README)
+
+```
+KAFKA scripts (quickstart)
+
+1) Make scripts executable:
+   chmod +x scripts/deploy-kafka-broker.sh scripts/create-kafka-topics.sh scripts/kafka-consumer-ops.sh
+
+2) Start a dev broker (single-node) with Zookeeper:
+   ./scripts/deploy-kafka-broker.sh up
+
+   Stop:
+   ./scripts/deploy-kafka-broker.sh down
+
+3) Create topics (default uses kafka:29092 and replication 1):
+   ./scripts/create-kafka-topics.sh
+
+   To target a different bootstrap or create with replication 3:
+   BOOTSTRAP=broker1:9092,broker2:9092,broker3:9092 REPLICATION_FACTOR=3 ./scripts/create-kafka-topics.sh
+
+4) Consumer group ops:
+   List groups:
+     ./scripts/kafka-consumer-ops.sh list
+
+   Describe group:
+     ./scripts/kafka-consumer-ops.sh describe transaction-service-group
+
+   Dry-run resetting offsets of a group to earliest for topic:
+     DRY_RUN=1 ./scripts/kafka-consumer-ops.sh reset transaction-service-group --to-earliest --topic transactions
+
+   Execute same reset:
+     ./scripts/kafka-consumer-ops.sh reset transaction-service-group --to-earliest --topic transactions --execute
+
+Notes:
+- When running commands from the host against the docker-compose broker, one approach is to exec into the container:
+  docker exec -it <kafka_container_name> bash
+  Then run kafka-topics or kafka-consumer-groups with --bootstrap-server localhost:29092
+
+- The scripts assume kafka-topics and kafka-consumer-groups binaries are available in PATH (they are available inside the confluentinc/cp-kafka container). Running the script on the host requires those binaries or using docker exec to invoke them inside the container.
+
+- For production multi-broker clusters, update REPLICATION_FACTOR to 3 (or desired replication) and use real bootstrap addresses. Use an operator such as Strimzi for Kubernetes-managed clusters.
+```
+
+Permission and run examples:
+
+- Make executable:
+  chmod +x scripts/*.sh
+
+- Bring dev kafka up:
+  ./scripts/deploy-kafka-broker.sh up
+  sleep 6
+  ./scripts/create-kafka-topics.sh
+
+- If container name is needed (e.g., to exec):
+  docker ps --filter ancestor=confluentinc/cp-kafka
+
+- To run the create-topics script inside container (alternative):
+  docker exec -i <kafka_container_name> bash -c "BOOTSTRAP=localhost:29092 bash -s" < scripts/create-kafka-topics.sh
+
+If you want I can:
+- produce these files and add them into the repository (I can do that for you), or
+- generate a single combined patch file that you can apply locally. Which would you like?
