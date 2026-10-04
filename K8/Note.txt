@@ -1,0 +1,3 @@
+• kube-proxy (Network Traffic Cop)
+	• The Job: Runs as a tiny daemon on every single EC2 worker node to maintain local network rules. It watches the Kubernetes API, and when CoreDNS points traffic to a service name, kube-proxy maps out the physical routing rules (using Linux iptables or IPVS) to make sure the network packets hit the correct destination pod.
+	• Why it matters for Production: It handles low-level, high-speed internal TCP/UDP load balancing across multiple healthy replicas of your applications.
