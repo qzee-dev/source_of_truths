@@ -1,0 +1,284 @@
+## 📊 1. AWS EKS Support Types & Charges
+AWS provides two consecutive support tiers for each Kubernetes minor version, giving a total of 26 months of availability: [1, 2] 
+
+| Support Type | Duration | Price (Per Cluster) | Details |
+|---|---|---|---|
+| Standard Support | 14 Months (approx. 60 weeks) | $0.10 / hour (~$73/mo) | Full feature updates and patches. |
+| Extended Support | 12 Months (after standard ends) | $0.60 / hour (~$438/mo) | 6x price increase for critical security patches only. |
+
+
+* 
+* The 14-Week Lifecycle Clarification: A standard Kubernetes minor version is released roughly every 14–17 weeks. AWS gives 14 months of Standard Support from launch. If you do not upgrade during this window, the cluster enters Extended Support and the charges increase automatically. [3, 4, 5] 
+* End of Support Rule: Once the 12-month Extended Support window drops, AWS stops supporting that version entirely and will force an automatic control plane upgrade. To stay within compliance under enterprise architectures (VIP/VVIP support tracking), you must upgrade to at least one of the six currently supported versions active on the [Amazon EKS Version Calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html). [2, 6, 7] 
+* Three Latest Mainstream Versions: As of 2026, the latest actively deployed versions in standard support include 1.32, 1.31, and 1.30.
+* 
+
+------------------------------
+## 🔔 2. Who Notifies You About Upgrades?
+Amazon CloudWatch (via AWS Health Dashboard integration and EventBridge) is what proactively sends notifications, alerts, and emails regarding upcoming cluster deprecations and due dates.
+
+* 
+* VPC Flow Logs track pure network traffic packets passing through your subnets and do not generate version lifecycle notifications.
+* 
+
+------------------------------
+## 🚀 3. Step-by-Step Concise Upgrade Guide (Zero-Downtime Best Practices)
+You must upgrade one minor version at a time (e.g., 1.30 ➡️ 1.31). [8] 
+## Step 1: Control Plane Upgrade
+Initiate the managed control plane change. Traffic is unaffected because AWS runs a highly available multi-AZ control plane behind the scenes.
+
+aws eks update-cluster-version --name <cluster-name> --kubernetes-version 1.31
+
+Wait for this process to completely finish before moving forward.
+## Step 2: Managed Add-ons Upgrade
+Your core add-ons must match the new API version requirements. Query and push updates for the compulsory utilities: [8, 9] 
+
+# Upgrade VPC-CNI, Kube-Proxy, and CoreDNS sequentially
+aws eks update-addon --cluster-name <cluster-name> --addon-name vpc-cni
+aws eks update-addon --cluster-name <cluster-name> --addon-name kube-proxy
+aws eks update-addon --cluster-name <cluster-name> --addon-name coredns
+
+## Step 3: Node Group Upgrade (Smooth Pod Migration)
+To move pods safely without crashing your application, perform a rolling update on your Managed Node Groups. AWS executes this cleanly under the hood using an industry-standard sequence: [9, 10] 
+
+aws eks update-nodegroup-version --cluster-name <cluster-name> --nodegroup-name <node-group> --kubernetes-version 1.31
+
+What AWS does behind the scenes to guarantee a smooth transition:
+
+   1. Cordoning: AWS marks an old worker node as SchedulingDisabled (kubectl cordon) so no new pods can be sent to it.
+   2. Draining: AWS gracefully expels (kubectl drain) existing running pods from the old node.
+   3. Eviction Respect: The cluster respects your configured PodDisruptionBudgets (PDBs), making sure it only terminates a safe percentage of pods at once while spinning up fresh pods on the new versioned nodes. [10, 11] 
+
+------------------------------
+If you are about to kick off this upgrade, let me know:
+
+* 
+* What is your current EKS cluster version?
+* Are you using Terraform or the AWS Console/CLI?
+* Do you have PodDisruptionBudgets configured for your core apps?
+* 
+
+
+[1] [https://aws.amazon.com](https://aws.amazon.com/about-aws/whats-new/2025/02/kubernetes-versions-amazon-eks-anywhere/)
+[2] [https://docs.aws.amazon.com](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html)
+[3] [https://aws.amazon.com](https://aws.amazon.com/eks/pricing/)
+[4] [https://www.nops.io](https://www.nops.io/blog/aws-eks-cost-optimization/)
+[5] [https://www.pump.co](https://www.pump.co/blog/amazon-eks-extended-support/)
+[6] [https://aws.amazon.com](https://aws.amazon.com/blogs/containers/amazon-eks-extended-support-for-kubernetes-versions-pricing/)
+[7] [https://www.spectrocloud.com](https://www.spectrocloud.com/blog/upgrading-your-amazon-eks-clusters)
+[8] [https://docs.aws.amazon.com](https://docs.aws.amazon.com/eks/latest/userguide/update-cluster.html)
+[9] [https://medium.com](https://medium.com/@deepakkushwahax/how-i-upgraded-an-eks-cluster-without-losing-sleep-or-pods-0cbea67bc655)
+[10] [https://docs.aws.amazon.com](https://docs.aws.amazon.com/eks/latest/best-practices/cluster-upgrades.html)
+[11] [https://dev.to](https://dev.to/shubhamkcloud/upgrading-an-amazon-eks-cluster-a-practical-step-by-step-guide-from-real-world-experience-47gl)
+
+
+
+
+
+🤖 Excellent choice. Using Terraform ensures your upgrade is declarative, repeatable, and completely avoids click-ops mistakes in production.
+To achieve a zero-downtime, fully automated rolling upgrade, you only need to change one single variable in your code (the cluster_version). Terraform handles the resource sequencing automatically.
+Below is the concise, production-ready Terraform structure using the industry-standard official [AWS EKS Verified Module](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/latest).
+------------------------------
+## 📄 The Production Upgrade Terraform Code
+
+# -----------------------------------------------------------------------------
+# 1. LOCAL VARIABLES - THE SINGLE POINT OF UPGRADE
+# -----------------------------------------------------------------------------
+locals {
+  cluster_name    = "production-eks-cluster"
+  # UPGRADE STEP: Increment this minor version by one (e.g., "1.30" -> "1.31")
+  cluster_version = "1.31" 
+}
+
+# -----------------------------------------------------------------------------
+# 2. OFFICIAL AWS EKS MODULE
+# -----------------------------------------------------------------------------
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
+
+  cluster_name    = local.cluster_name
+  cluster_version = local.cluster_version
+
+  vpc_id     = var.vpc_id
+  subnet_ids = var.private_subnet_ids
+
+  # Enables internal API communication securely
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_private_access = true
+
+  # ---------------------------------------------------------------------------
+  # 3. MANAAGED ADD-ONS (AWS automatically pulls matching default versions)
+  # ---------------------------------------------------------------------------
+  cluster_addons = {
+    vpc-cni = {
+      resolve_conflicts_on_update = "PRESERVE"
+    }
+    kube-proxy = {
+      resolve_conflicts_on_update = "PRESERVE"
+    }
+    coredns = {
+      resolve_conflicts_on_update = "PRESERVE"
+      # Best Practice: Pass configuration values to add anti-affinity 
+      configuration_values = jsonencode({
+        replicaCount = 3
+      })
+    }
+    aws-ebs-csi-driver = {
+      resolve_conflicts_on_update = "PRESERVE"
+    }
+    eks-pod-identity-agent = {
+      resolve_conflicts_on_update = "PRESERVE"
+    }
+  }
+
+  # ---------------------------------------------------------------------------
+  # 4. MANAGED NODE GROUPS (Handles Safe Pod Draining Automatically)
+  # ---------------------------------------------------------------------------
+  eks_managed_node_groups = {
+    general_purpose = {
+      min_size       = 3
+      max_size       = 6
+      desired_size   = 3
+      instance_types = ["t3.medium"]
+
+      # Best Practice: Force old nodes to cordon & drain safely without dropping packets
+      update_config = {
+        max_unavailable_percentage = 33 # Keeps 67% of capacity alive during rolling upgrade
+      }
+    }
+  }
+}
+
+------------------------------
+## 🛡️ Production Execution Best Practices
+When running this state file change, follow these core execution procedures to prevent disruption:
+
+   1. Enforce Application PDBs First: Before running terraform apply, ensure your application repositories contain active PodDisruptionBudgets (PDBs).
+   
+   apiVersion: policy/v1kind: PodDisruptionBudgetmetadata:
+     name: frontend-pdbspec:
+     minAvailable: 2 # Ensures AWS never deletes too many replicas at once during the node drain phase
+     selector:
+       matchLabels:
+         app: frontend
+   
+   2. Review the Plan: When you execute terraform plan, verify that it targets an in-place update for your cluster version and an update for your node groups. It should never show a destructive replacement (-+ or -) for your core infrastructure.
+   3. The Automatic Dependency Chain: Because the module links node groups and addons to local.cluster_version, Terraform will implicitly apply the updates in the correct structural sequence:
+   * First: Control Plane updates.
+      * Second: Node Group allocations shift automatically via a safe cloud rolling update.
+      * Third: Add-ons update smoothly to reflect the new version API compatibility matrix.
+   
+Would you like help setting up a PodDisruptionBudget configuration sample for your workloads, or are you ready to configure the AWS CloudWatch / EventBridge alerts to track future deprecation deadlines?
+
+
+
+
+
+
+==================================================
+pod distribution budget
+==================================
+Here are the production-ready templates for both: the Pod Disruption Budget (PDB) to keep your apps safe during the node upgrade, and the AWS EventBridge / CloudWatch Alert via Terraform to notify you before a version becomes due for deprecation.
+## 🛡️ 1. The Pod Disruption Budget (PDB)
+Apply this directly to your application workloads before changing your Terraform version. It blocks AWS from draining too many pods at once, guaranteeing zero downtime.
+Save this as pdb.yaml and apply it to your namespaces:
+
+apiVersion: policy/v1kind: PodDisruptionBudgetmetadata:
+  name: core-app-pdb
+  namespace: productionspec:
+  # Strategy Option A: Ensure a minimum number of replicas are always processing traffic
+  minAvailable: 2 
+  
+  # Strategy Option B: Alternatively, allow a maximum of 1 pod to be offline at any given second
+  # maxUnavailable: 1 
+
+  selector:
+    matchLabels:
+      app: core-payment-service # Must match the exact label on your Deployment pods
+
+------------------------------
+## 🔔 2. Terraform Code for AWS CloudWatch / EventBridge Notification
+AWS fires events to your AWS Health Dashboard when an EKS cluster is approaching its Standard or Extended support expiration dates.
+This Terraform block intercepts those events via Amazon EventBridge and instantly routes a clean notification alert to an SNS Topic (which can forward to your email, PagerDuty, or Slack) [AWS Health Dashboard](https://docs.aws.amazon.com/health/latest/ug/cloudwatch-events-health.html).
+
+# -----------------------------------------------------------------------------
+# 1. CREATE THE SNS TOPIC FOR ALERTS
+# -----------------------------------------------------------------------------
+resource "aws_sns_topic" "eks_upgrade_alerts" {
+  name = "eks-version-deprecation-alerts"
+}
+
+# Replace with your actual DevOps engineering team email address
+resource "aws_sns_topic_subscription" "email_sub" {
+  topic_arn = aws_sns_topic.eks_upgrade_alerts.arn
+  protocol  = "email"
+  endpoint  = "devops-alerts@yourcompany.com" 
+}
+
+# -----------------------------------------------------------------------------
+# 2. CREATE THE EVENTBRIDGE RULE FOR AWS HEALTH UPGRADE EVENTS
+# -----------------------------------------------------------------------------
+resource "aws_cloudwatch_event_rule" "eks_deprecation" {
+  name        = "capture-eks-upgrade-notices"
+  description = "Triggers when AWS issues a notice regarding EKS cluster version support"
+
+  event_pattern = jsonencode({
+    "source": [
+      "aws.health"
+    ],
+    "detail-type": [
+      "AWS Health Event"
+    ],
+    "detail": {
+      "service": [
+        "EKS"
+      ],
+      "eventTypeCategory": [
+        "notice"
+      ]
+    }
+  })
+}
+
+# -----------------------------------------------------------------------------
+# 3. ROUTE THE CAPTURED EVENT DIRECTLY TO YOUR SNS TOPIC
+# -----------------------------------------------------------------------------
+resource "aws_cloudwatch_event_target" "sns" {
+  rule      = aws_cloudwatch_event_rule.eks_deprecation.name
+  target_id = "SendToSNS"
+  arn       = aws_sns_topic.eks_upgrade_alerts.arn
+}
+
+# Grants EventBridge explicit permission to push messages to your SNS pipeline
+resource "aws_sns_topic_policy" "default" {
+  arn    = aws_sns_topic.eks_upgrade_alerts.arn
+  policy = data.aws_iam_policy_document.sns_topic_policy.json
+}
+
+data "aws_iam_policy_document" "sns_topic_policy" {
+  statement {
+    effect  = "Allow"
+    actions = ["SNS:Publish"]
+    principals {
+      type        = "Service"
+      identifiers = ["://amazonaws.com"]
+    }
+    resources = [aws_sns_topic.eks_upgrade_alerts.arn]
+  }
+}
+
+## 🏁 Next Steps to Execute
+
+   1. Deploy the PDBs inside your Kubernetes namespaces using kubectl apply -f pdb.yaml.
+   2. Apply the EventBridge Terraform module above so you have alerting coverage. Make sure to check your inbox and confirm the AWS SNS email subscription!
+   3. Increment your cluster_version from 1.30 to 1.31 in your primary cluster file and execute terraform plan followed by terraform apply.
+
+Do you need help calculating how much capacity buffer your node groups require during the rolling upgrade, or should we look into setting up a Slack Webhook configuration for these alerts?
+
+
+
+
+I 
+
+
