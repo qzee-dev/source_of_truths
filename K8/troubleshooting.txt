@@ -1,0 +1,96 @@
+When an external ingress or proxy returns a 503 Service Unavailable error, it often means the network path from the router down to the application container is broken. Tracing this issue requires a systematic "trickle-down" approach, moving from cluster-wide CoreDNS and service discovery layers down to internal container execution. [1, 2, 3] 
+------------------------------
+## Layer 1: Cluster DNS & CoreDNS Investigation
+If the cluster's internal DNS cannot map names to internal IPs, communication breaks before packets even leave the pod. [4, 5] 
+
+* 
+* Check the CoreDNS infrastructure health:
+kubectl get pods -n kube-system -l k8s-app=kube-dns
+* Inspect CoreDNS runtime logs for query errors:
+kubectl logs -n kube-system -l k8s-app=kube-dns --tail=50
+* Verify CoreDNS services and live endpoint targets:
+kubectl get svc,endpoints -n kube-system -l k8s-app=kube-dns
+* Test immediate internal resolution using an isolated network container:
+kubectl run nettest --rm -it --image=nicolaka/netshoot -- nslookup kubernetes.default [6, 7, 8] 
+* 
+
+------------------------------
+## Layer 2: Service & Endpoint Layer Inspection
+A 503 error frequently happens when a Service exists but has no underlying healthy Pod endpoints matching its label selectors. [9, 10] 
+
+* 
+* List your application services to check target ports:
+kubectl get svc -n <namespace>
+* Inspect backing endpoints to see if healthy Pods are assigned:
+kubectl get endpoints <service-name> -n <namespace>
+* Examine the deep networking structure of your service configuration:
+kubectl describe svc <service-name> -n <namespace> [11, 12, 13, 14, 15] 
+* 
+
+------------------------------
+## Layer 3: Target Pod Networking & Policies
+If endpoints exist but connections timeout, active NetworkPolicies or incorrect CNI routing definitions might be filtering the traffic. [3, 16] 
+
+* 
+* Isolate all applied network firewall policies in the current namespace:
+kubectl get networkpolicies -n <namespace>
+* Audit the target Pod details for failed liveness/readiness probes:
+kubectl describe pod <pod-name> -n <namespace>
+* Extract the explicit internal cluster IP assigned to your active pod:
+kubectl get pod <pod-name> -n <namespace> -o jsonpath='{.status.podIP}' [9, 11, 12, 13, 17] 
+* 
+
+------------------------------
+## Layer 4: Deep Interrogation & Exec Into the Container
+When network layers are healthy but the app inside still fails, you must step inside the pod's specific environment. [10, 18] 
+
+* 
+* Read the container's raw DNS configuration routing file:
+kubectl exec -it <pod-name> -n <namespace> -- cat /etc/resolv.conf
+* Run a localized name translation query directly inside your active app runtime:
+kubectl exec -it <pod-name> -n <namespace> -- nslookup <target-service-name>
+* Gain an interactive terminal shell inside a single-container pod:
+kubectl exec -it <pod-name> -n <namespace> -- /bin/bash
+* Gain an interactive terminal shell inside a specific multi-container pod:
+kubectl exec -it <pod-name> -c <container-name> -n <namespace> -- /bin/sh
+* Inject an ephemeral sidecar debugger if your application container is distroless (missing a shell):
+kubectl debug -it <pod-name> --image=nicolaka/netshoot --target=<container-name> -n <namespace> [3, 6, 8, 15, 18, 19, 20, 21] 
+* 
+
+------------------------------
+## Layer 5: App Runtime Verification
+Once logged in via shell or an ephemeral container, bypass the cluster proxy mechanics to query your application runtime environment locally. [3, 8] 
+
+* 
+* Test immediate application responsiveness locally (run inside the container):
+curl -iv http://localhost:<port>/health
+* Analyze local loopback bindings and processes listening to target ports (run inside the container):
+netstat -tuln or ss -tuln
+* Tail active runtime system exception streams:
+kubectl logs <pod-name> -n <namespace> --c <container-name> --tail=100 -f [3, 8] 
+* 
+
+------------------------------
+To target this faster, what type of Ingress or Service proxy sits in front of this pod, and is your container failing its readiness probe?
+
+[1] [https://www.devopsschool.com](https://www.devopsschool.com/blog/list-of-commands-troubleshoot-networking-in-kubernetes/)
+[2] [https://platform9.com](https://platform9.com/blog/the-six-most-popular-kubernetes-networking-troubleshooting-issues/)
+[3] [https://kubernetes.recipes](https://kubernetes.recipes/recipes/troubleshooting/kubernetes-network-troubleshooting/)
+[4] [https://www.instagram.com](https://www.instagram.com/reel/DY9WXHmj8z1/?hl=en)
+[5] [https://www.instagram.com](https://www.instagram.com/reel/DY4S0T6AP90/)
+[6] [https://institute.sfeir.com](https://institute.sfeir.com/en/kubernetes-training/diagnose-resolve-problems-network-cluster-kubernetes/)
+[7] [https://oneuptime.com](https://oneuptime.com/blog/post/2026-01-06-debug-kubernetes-dns-issues/view)
+[8] [https://thebackroomtech.com](https://thebackroomtech.com/debug-kubernetes-networking-issues/)
+[9] [https://kubernetes.io](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/)
+[10] [https://www.youtube.com](https://www.youtube.com/watch?v=zIDC335U2Cg)
+[11] [https://oneuptime.com](https://oneuptime.com/blog/post/2026-01-19-kubernetes-troubleshoot-networking/view)
+[12] [https://akhileshmishra.substack.com](https://akhileshmishra.substack.com/p/kubernetes-troubleshooting-scenarios-5cb)
+[13] [https://medium.com](https://medium.com/@tradingcontentdrive/kubernetes-troubleshooting-quick-cheatsheet-306a13e6b64d)
+[14] [https://www.youtube.com](https://www.youtube.com/watch?v=AUFNGozlTgA)
+[15] [https://docs.bitnami.com](https://docs.bitnami.com/kubernetes/faq/troubleshooting/troubleshooting-dns/)
+[16] [https://www.youtube.com](https://www.youtube.com/watch?v=oMVMhbLA2dQ)
+[17] [https://www.kubenatives.com](https://www.kubenatives.com/p/kubernetes-dns-troubleshooting-coredns)
+[18] [https://www.networkershome.com](https://www.networkershome.com/fundamentals/kubernetes-networking/kubernetes-troubleshooting-networking/)
+[19] [https://docs.cloud.google.com](https://docs.cloud.google.com/kubernetes-engine/docs/troubleshooting/kube-dns)
+[20] [https://v1-33.docs.kubernetes.io](https://v1-33.docs.kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/)
+[21] [https://kubernetes.io](https://kubernetes.io/docs/tasks/debug/debug-application/get-shell-running-container/)
