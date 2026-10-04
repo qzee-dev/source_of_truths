@@ -1,0 +1,10 @@
+🚦 How to Manage add-on  Versioning Safely
+When deploying a production system, you should never guess or hardcode random versions. You have two highly reliable options to ensure everything matches your cluster version perfectly:
+Option A: Let AWS choose the "Default" versions (Recommended)
+If you deploy your addons via Terraform, the AWS CLI, or the AWS Console without explicitly specifying a version string, AWS will automatically pull the certified, safest default version that matches your exact Kubernetes cluster version.
+Option B: Query the AWS API directly
+If your production protocol requires pinned versions, you must use the AWS CLI to ask the API exactly what versions are allowed for your cluster:
+
+# Replace "1.31" with your actual EKS Cluster Version
+aws eks describe-addon-versions --kubernetes-version 1.31 --addon-name coredns
+
