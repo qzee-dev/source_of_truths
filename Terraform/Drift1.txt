@@ -1,0 +1,48 @@
+Not exactly. There is a small but important distinction: what you are doing right now is Infrastructure Importing, not Drift Management. [1] 
+The import block workflow is the proper way to bring unmanaged infrastructure into Terraform for the first time. [2, 3] 
+Understanding how the two concepts differ helps in choosing the right tool for the job:
+## 1. What you are doing: Importing (Bringing under management)
+
+* 
+* The Situation: A resource was created completely outside of Terraform (e.g., clicked manually in the AWS Console, or built by another tool). Terraform has zero record of it in its state file. [2, 4] 
+* The Solution: You use the import block to tell Terraform: "Stop ignoring this existing resource. Map it to my code and start tracking it from now on." [2, 5] 
+* 
+
+## 2. What Drift Management actually is
+
+* 
+* The Situation: Terraform already tracks the resource. However, someone logged into the AWS Console later and manually changed something—like changing the instance type from t3.micro to t3.large, or editing a security group.
+* The Discrepancy: Your real-world infrastructure has "drifted" away from what your written code says. [4, 6, 7, 8] 
+* 
+
+------------------------------
+## How to Properly Manage Drift
+If your infrastructure drifts, you do not use an import block. Instead, you use standard Terraform commands to find and fix the deviation: [7] 
+## Step 1: Detect the Drift
+To see if anything has changed in the cloud without accidentally applying updates, use the refresh-only flag: [7, 9] 
+
+terraform plan -refresh-only
+
+This updates Terraform's internal state to match the real world, then safely highlights exactly what attributes drifted. [7, 10] 
+## Step 2: Resolve the Drift (Choose One)
+Once you see the drift, you have two options: [8] 
+
+* 
+* Option A (Overwrite the manual change): If you want to undo the manual change and force the cloud back to what your code specifies, run a normal terraform plan and terraform apply. Terraform will show something like 0 to add, 1 to change, 0 to destroy and will overwrite the manual click. [8, 10, 11] 
+* Option B (Accept the manual change): If the manual change was an intentional emergency fix that you want to keep, update your .tf code to match the new real-world reality. Once your code matches, running terraform plan will output: “No changes. Your infrastructure matches the configuration.” [1, 2, 8] 
+* 
+
+------------------------------
+Once you finish your current import process, your instance will be fully managed. Would you like to know how to set up automated drift detection pipelines so you can catch manual cloud changes automatically in the future?
+
+[1] [https://www.linkedin.com](https://www.linkedin.com/posts/sasanga-edirisinghe_devops-terraform-infrastructureascode-activity-7418685784066600960--Cbo)
+[2] [https://trustedinstitute.com](https://trustedinstitute.com/concept/terraform-associate/maintain-infrastructure/import-workflow-practices/)
+[3] [https://www.youtube.com](https://www.youtube.com/watch?v=TJlbXUKgBHg)
+[4] [https://sailor.sh](https://sailor.sh/blog/terraform-import-existing-infrastructure-drift-detection/)
+[5] [https://www.firefly.ai](https://www.firefly.ai/academy/terraform-iac)
+[6] [https://www.hashicorp.com](https://www.hashicorp.com/en/blog/detecting-and-managing-drift-with-terraform)
+[7] [https://developer.hashicorp.com](https://developer.hashicorp.com/terraform/tutorials/state/resource-drift)
+[8] [https://www.youtube.com](https://www.youtube.com/watch?v=FHoPzQQJw_Y)
+[9] [https://developer.hashicorp.com](https://developer.hashicorp.com/terraform/tutorials/state/resource-drift)
+[10] [https://stackgen.com](https://stackgen.com/blog/how-to-detect-and-fix-terraform-state-drift)
+[11] [https://scalr.com](https://scalr.com/learning-center/terraform-drift-detection-how-to-prevent-and-remediate)
