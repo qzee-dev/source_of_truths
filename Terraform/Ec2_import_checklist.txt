@@ -103,13 +103,93 @@ aws_dhcp_options
 ``
 
 
+====================
+Solution
+==================
+Terraform/
+├── provider.tf
+├── main.tf
+├── imports.tf
+├── generated.tf
+
+
+
+
+
+[provider.tf:]
+terraform {
+  required_version = ">= 1.5"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "eu-north-1"
+}
+
+
+[main.tf:]
+resource "aws_instance" "server01" {}
+
+resource "aws_vpc" "main" {}
+
+resource "aws_subnet" "public" {}
+
+resource "aws_security_group" "server01" {}
+
+resource "aws_network_interface" "server01" {}
+
+resource "aws_ebs_volume" "root" {}
+
+
+[imports.tf]
+
+import {
+  to = aws_instance.server01
+  id = "i-076cb0a507884f3a6"
+}
+
+import {
+  to = aws_vpc.main
+  id = "vpc-0b69e283891dc7505"
+}
+
+import {
+  to = aws_subnet.public
+  id = "subnet-0ccf38b701d16ffc"
+}
+
+import {
+  to = aws_security_group.server01
+  id = "sg-001adec0cd944bbb2"
+}
+
+import {
+  to = aws_network_interface.server01
+  id = "eni-05804cd84d5d70126"
+}
+
+import {
+  to = aws_ebs_volume.root
+  id = "vol-0ae35254f31050269"
+}
+
+Commands:
+terraform init
+terraform plan -generate-config-out=generated.tf
 
 
 
 
 
 
-12. NACLs
+
+
 
 
 
