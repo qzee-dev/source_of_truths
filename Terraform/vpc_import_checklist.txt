@@ -107,4 +107,43 @@ terraform init
 terraform plan -generate-config-out=generated.tf
 
 
+===============================
+VPC REALATED RESOURCES COOMAND
+==============================
+VPC_ID=vpc-0b69e283891dc7505
 
+echo "===== VPC =====" && \
+aws ec2 describe-vpcs --vpc-ids $VPC_ID --query 'Vpcs[*].VpcId' --output text && \
+echo -e "\n===== SUBNETS =====" && \
+aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID --query 'Subnets[*].SubnetId' --output text && \
+echo -e "\n===== SECURITY GROUPS =====" && \
+aws ec2 describe-security-groups --filters Name=vpc-id,Values=$VPC_ID --query 'SecurityGroups[*].GroupId' --output text && \
+echo -e "\n===== ROUTE TABLES =====" && \
+aws ec2 describe-route-tables --filters Name=vpc-id,Values=$VPC_ID --query 'RouteTables[*].RouteTableId' --output text && \
+echo -e "\n===== ROUTE TABLE ASSOCIATIONS =====" && \
+aws ec2 describe-route-tables --filters Name=vpc-id,Values=$VPC_ID --query 'RouteTables[*].Associations[*].RouteTableAssociationId' --output text && \
+echo -e "\n===== INTERNET GATEWAYS =====" && \
+aws ec2 describe-internet-gateways --filters Name=attachment.vpc-id,Values=$VPC_ID --query 'InternetGateways[*].InternetGatewayId' --output text && \
+echo -e "\n===== NETWORK ACLS =====" && \
+aws ec2 describe-network-acls --filters Name=vpc-id,Values=$VPC_ID --query 'NetworkAcls[*].NetworkAclId' --output text && \
+echo -e "\n===== VPC ENDPOINTS =====" && \
+aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=$VPC_ID --query 'VpcEndpoints[*].VpcEndpointId' --output text && \
+echo -e "\n===== NAT GATEWAYS =====" && \
+aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=$VPC_ID --query 'NatGateways[*].NatGatewayId' --output text && \
+echo -e "\n===== ELASTIC IPS =====" && \
+aws ec2 describe-addresses --query 'Addresses[*].AllocationId' --output text && \
+echo -e "\n===== DHCP OPTIONS =====" && \
+aws ec2 describe-vpcs --vpc-ids $VPC_ID --query 'Vpcs[*].DhcpOptionsId' --output text
+``
+============================================================================================
+✓ aws_vpc
+✓ aws_subnet
+✓ aws_security_group
+✓ aws_route_table
+✓ aws_route_table_association
+✓ aws_internet_gateway
+✓ aws_network_acl
+✓ aws_vpc_endpoint
+✓ aws_nat_gateway
+✓ aws_eip
+✓ aws_dhcp_options
