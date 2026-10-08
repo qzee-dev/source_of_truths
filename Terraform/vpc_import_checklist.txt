@@ -1,0 +1,134 @@
+VPC
+├── 4 Subnets
+├── 4 Route Tables
+├── Internet Gateway
+├── S3 VPC Endpoint
+├── Network ACL
+├── DHCP Options Set
+└── Route Table Associations
+``
+
+
+Step 1: Discover Everything
+
+Replace the VPC ID with yours:
+VPC_ID=vpc-0495bd2c7b53dfee5
+`
+VPC:
+aws ec2 describe-vpcs \
+  --vpc-ids $VPC_ID
+
+Subnets:
+aws ec2 describe-subnets \
+  --filters Name=vpc-id,Values=$VPC_ID
+
+Route Tables:
+aws ec2 describe-route-tables \
+  --filters Name=vpc-id,Values=$VPC_ID
+
+
+Internet Gateway:
+aws ec2 describe-internet-gateways \
+  --filters Name=attachment.vpc-id,Values=$VPC_ID
+
+Network ACLs:
+aws ec2 describe-network-acls \
+  --filters Name=vpc-id,Values=$VPC_ID
+
+DHCP Options:
+aws ec2 describe-vpcs \
+  --vpc-ids $VPC_ID \
+  --query "Vpcs[].DhcpOptionsId"
+
+VPC Endpoints:
+aws ec2 describe-vpc-endpoints \
+  --filters Name=vpc-id,Values=$VPC_ID
+
+
+Security Groups:
+aws ec2 describe-security-groups \
+  --filters Name=vpc-id,Values=$VPC_ID
+
+
+
+Step 2: Create Placeholder Resources [main.tf]
+resource "aws_vpc" "main" {}
+
+resource "aws_subnet" "public_a" {}
+resource "aws_subnet" "private_a" {}
+resource "aws_subnet" "public_b" {}
+resource "aws_subnet" "private_b" {}
+
+resource "aws_route_table" "public" {}
+resource "aws_route_table" "private_a" {}
+resource "aws_route_table" "private_b" {}
+
+resource "aws_internet_gateway" "igw" {}
+
+resource "aws_vpc_endpoint" "s3" {}
+
+resource "aws_network_acl" "main" {}
+
+resource "aws_dhcp_options" "main" {}
+
+
+Step 3: [Create imports.tf]
+
+import {
+  to = aws_vpc.main
+  id = "vpc-0495bd2c7b53dfee5"
+}
+
+import {
+  to = aws_internet_gateway.igw
+  id = "igw-xxxxxxxx"
+}
+
+import {
+  to = aws_subnet.public_a
+  id = "subnet-xxxxxxxx"
+}
+
+import {
+  to = aws_subnet.private_a
+  id = "subnet-xxxxxxxx"
+}
+
+import {
+  to = aws_subnet.public_b
+  id = "subnet-xxxxxxxx"
+}
+
+import {
+  to = aws_subnet.private_b
+  id = "subnet-xxxxxxxx"
+}
+
+import {
+  to = aws_route_table.public
+  id = "rtb-xxxxxxxx"
+}
+
+import {
+  to = aws_vpc_endpoint.s3
+  id = "vpce-xxxxxxxx"
+}
+
+  Step 4: Generate Configuration
+- terraform init
+- terraform plan -generate-config-out=generated.tf
+
+
+===============================
+Faster Option (Recommended)
+===============================
+
+For a VPC of this size, use Terraformer:
+
+Shell
+terraformer import aws \
+--resources=vpc,subnet,route_table,route_table_association,internet_gateway,network_acl,vpc_endpoint,security_group \
+--regions=eu-north-1
+  
+  
+
