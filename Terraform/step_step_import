@@ -9,7 +9,13 @@ ii)aws ec2 describe-volumes \
 --filters Name=attachment.instance-id,Values=i-076cb0a507884f3a6
 
 iii)aws ec2 describe-network-interfaces \
---filters Name=attachment.instance-id,Values=i-076cb0a507884f3a6
+  --filters Name=attachment.instance-id,Values=i-076cb0a507884f3a6
 
 iv)aws ec2 describe-addresses
 v)aws ec2 describe-security-groups
+
+
+
+===========================================
+a)terraform init
+b)terraform plan -generate-config-out=generated.tf
