@@ -183,6 +183,21 @@ Commands:
 terraform init
 terraform plan -generate-config-out=generated.tf
 
+------------------------------------
+Once generated.tf looks correct:
+--------------------------------------
+
+Copy the generated resources into main.tf.
+Delete the empty resource blocks.
+Delete imports.tf (optional).
+Run:
+Shell
+terraform plan
+
+Expected result:
+
+Plain Text
+No changes. Infrastructure matches the configuration.
 
 
 
