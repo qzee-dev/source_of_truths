@@ -6,129 +6,105 @@ VPC
 ├── Network ACL
 ├── DHCP Options Set
 └── Route Table Associations
-``
+Core VPC Resources
+✓ aws_vpc
+✓ aws_subnet
+✓ aws_route_table
+✓ aws_route_table_association
+✓ aws_internet_gateway
 
+Networking
+✓ aws_network_acl
+✓ aws_network_acl_association
+✓ aws_default_network_acl
 
-Step 1: Discover Everything
+Security
+✓ aws_security_group
+✓ aws_default_security_group
 
-Replace the VPC ID with yours:
-VPC_ID=vpc-0495bd2c7b53dfee5
-`
-VPC:
-aws ec2 describe-vpcs \
-  --vpc-ids $VPC_ID
+DHCP & DNS
+✓ aws_dhcp_options
+✓ aws_vpc_dhcp_options_association
 
-Subnets:
-aws ec2 describe-subnets \
-  --filters Name=vpc-id,Values=$VPC_ID
+VPC Endpoints
+✓ aws_vpc_endpoint
 
-Route Tables:
-aws ec2 describe-route-tables \
-  --filters Name=vpc-id,Values=$VPC_ID
+Optional NAT Components
+✓ aws_nat_gateway
+✓ aws_eip
 
+Optional Routing
+✓ aws_route
 
-Internet Gateway:
-aws ec2 describe-internet-gateways \
-  --filters Name=attachment.vpc-id,Values=$VPC_ID
+Optional Peering
+✓ aws_vpc_peering_connection
 
-Network ACLs:
-aws ec2 describe-network-acls \
-  --filters Name=vpc-id,Values=$VPC_ID
+Optional Transit Gateway
+✓ aws_ec2_transit_gateway_vpc_attachment
 
-DHCP Options:
-aws ec2 describe-vpcs \
-  --vpc-ids $VPC_ID \
-  --query "Vpcs[].DhcpOptionsId"
+Optional VPN
+✓ aws_vpn_gateway
+✓ aws_customer_gateway
+===================================
+EC2 Infrastructure Discovery
 
-VPC Endpoints:
-aws ec2 describe-vpc-endpoints \
-  --filters Name=vpc-id,Values=$VPC_ID
+shell:aws ec2 describe-instances \
+  --instance-ids i-076cb0a507884f3a6 \
+  --query 'Reservations[0].Instances[0].{
+    InstanceId:InstanceId,
+    VpcId:VpcId,
+    SubnetId:SubnetId,
+    SecurityGroups:SecurityGroups[*].GroupId,
+    NetworkInterfaces:NetworkInterfaces[*].NetworkInterfaceId,
+    Volumes:BlockDeviceMappings[*].Ebs.VolumeId,
+    KeyPair:KeyName,
+    IAMProfile:IamInstanceProfile.Arn
+  }'
 
-
-Security Groups:
-aws ec2 describe-security-groups \
-  --filters Name=vpc-id,Values=$VPC_ID
-
-
-
+=============================================
 Step 2: Create Placeholder Resources [main.tf]
 resource "aws_vpc" "main" {}
+Complete Placeholder main.tf
+# EC2
+resource "aws_instance" "server01" {}
 
-resource "aws_subnet" "public_a" {}
-resource "aws_subnet" "private_a" {}
-resource "aws_subnet" "public_b" {}
-resource "aws_subnet" "private_b" {}
+resource "aws_network_interface" "server01" {}
+
+resource "aws_ebs_volume" "root" {}
+
+resource "aws_key_pair" "server01" {}
+
+resource "aws_eip" "server01" {}
+
+resource "aws_iam_instance_profile" "server01" {}
+
+# VPC
+resource "aws_vpc" "main" {}
+
+resource "aws_subnet" "public" {}
+
+resource "aws_security_group" "server01" {}
+
+resource "aws_internet_gateway" "main" {}
 
 resource "aws_route_table" "public" {}
-resource "aws_route_table" "private_a" {}
-resource "aws_route_table" "private_b" {}
 
-resource "aws_internet_gateway" "igw" {}
-
-resource "aws_vpc_endpoint" "s3" {}
+resource "aws_route_table_association" "public" {}
 
 resource "aws_network_acl" "main" {}
 
-resource "aws_dhcp_options" "main" {}
+resource "aws_vpc_endpoint" "s3" {}
 
 
-Step 3: [Create imports.tf]
-
-import {
-  to = aws_vpc.main
-  id = "vpc-0495bd2c7b53dfee5"
-}
-
-import {
-  to = aws_internet_gateway.igw
-  id = "igw-xxxxxxxx"
-}
-
-import {
-  to = aws_subnet.public_a
-  id = "subnet-xxxxxxxx"
-}
-
-import {
-  to = aws_subnet.private_a
-  id = "subnet-xxxxxxxx"
-}
-
-import {
-  to = aws_subnet.public_b
-  id = "subnet-xxxxxxxx"
-}
-
-import {
-  to = aws_subnet.private_b
-  id = "subnet-xxxxxxxx"
-}
-
-import {
-  to = aws_route_table.public
-  id = "rtb-xxxxxxxx"
-}
-
-import {
-  to = aws_vpc_endpoint.s3
-  id = "vpce-xxxxxxxx"
-}
-
-  Step 4: Generate Configuration
-- terraform init
-- terraform plan -generate-config-out=generated.tf
-
-
-===============================
-Faster Option (Recommended)
-===============================
-
-For a VPC of this size, use Terraformer:
+Complete Import Checklist
+===========================================
+After populating the IDs in imports.tf:
+==============================================
 
 Shell
-terraformer import aws \
---resources=vpc,subnet,route_table,route_table_association,internet_gateway,network_acl,vpc_endpoint,security_group \
---regions=eu-north-1
-  
-  
+terraform init
+ 
+terraform plan -generate-config-out=generated.tf
+
+
 
