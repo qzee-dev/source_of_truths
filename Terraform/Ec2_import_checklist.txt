@@ -35,7 +35,8 @@ aws ec2 describe-security-groups \
 
 5. Subnet: 
 aws ec2 describe-subnets \
-  --subnet-ids subnet-0ccf38b701d16ffc
+  --filters Name=vpc-id,Values=vpc-0495bd2c7b53dfee5 \
+  --query 'Subnets[*].SubnetId'
 
 6. VPC
 aws ec2 describe-vpcs \
