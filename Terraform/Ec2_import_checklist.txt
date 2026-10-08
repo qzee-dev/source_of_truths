@@ -1,0 +1,18 @@
+Full EC2 Infrastructure Import Checklist
+Plain Text
+✓ aws_instance
+✓ aws_vpc
+✓ aws_subnet
+✓ aws_security_group
+✓ aws_network_interface
+✓ aws_ebs_volume
+ 
+Optional:
+✓ aws_key_pair
+✓ aws_eip
+✓ aws_internet_gateway
+✓ aws_route_table
+✓ aws_route_table_association
+✓ aws_iam_instance_profile
+
+For a truly reproducible EC2 environment, import all items in the checklist above. The first six resources are the minimum required for your current EC2 instance.
