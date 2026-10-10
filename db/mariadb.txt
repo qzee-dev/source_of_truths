@@ -18,6 +18,8 @@ systemctl status mariadb
 
 Step 2: Secure MariaDB
 
+sudo mariadb-secure-installation
+
 Set root password:
 
 sudo mysql -e "UPDATE mysql.user SET Password=PASSWORD('password123') WHERE User='root';"
