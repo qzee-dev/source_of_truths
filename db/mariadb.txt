@@ -114,3 +114,184 @@ mysql -u root -ppassword123 sportscars -e "SELECT * FROM cars;"
 
 
 That is the complete manual build process for exactly the MariaDB installation and sportscars database setup shown in your screenshots, without adding anything outside the scope of what you pasted.
+
+
+
+
+
+
+
+
+If by "attach it to a distributed system" you mean your EC2-hosted MariaDB will be used by multiple application servers (for example Spring Boot applications running on several EC2 instances), then the simplest architecture is:
+
+                +------------------+
+                | Load Balancer    |
+                +--------+---------+
+                         |
+        +----------------+----------------+
+        |                                 |
++-------v-------+                 +-------v-------+
+| Spring Boot 1 |                 | Spring Boot 2 |
+| EC2 Instance  |                 | EC2 Instance  |
++-------+-------+                 +-------+-------+
+        \                               /
+         \                             /
+          \                           /
+           +------------+------------+
+                        |
+              +---------v---------+
+              | MariaDB on EC2    |
+              | sportscars DB     |
+              +-------------------+
+
+Step 1: Create the database on EC2
+
+Follow exactly the MariaDB installation and sportscars database setup from your YAML.
+
+Step 2: Allow network access
+
+Open the EC2 security group hosting MariaDB:
+
+Port: 3306
+Source: Security Group of Spring EC2 instances
+
+
+Avoid opening:
+
+0.0.0.0/0 -> 3306
+
+
+in production.
+
+Step 3: Get the EC2 private IP
+
+On the MariaDB server:
+
+hostname -I
+
+
+Example:
+
+10.0.1.100
+
+
+Your Spring applications will use this IP.
+
+Step 4: Configure MariaDB to accept connections
+
+Edit:
+
+sudo vi /etc/my.cnf
+
+
+Change:
+
+bind-address=127.0.0.1
+
+
+to:
+
+bind-address=0.0.0.0
+
+
+Restart:
+
+sudo systemctl restart mariadb
+
+Step 5: Create a Spring datasource user
+
+You already have:
+
+CREATE USER 'caradmin'@'localhost'
+IDENTIFIED BY 'caradmin123';
+
+
+For remote Spring servers:
+
+CREATE USER 'caradmin'@'%'
+IDENTIFIED BY 'caradmin123';
+
+GRANT ALL PRIVILEGES
+ON sportscars.*
+TO 'caradmin'@'%';
+
+FLUSH PRIVILEGES;
+
+Step 6: Configure Spring Boot
+
+In application.properties:
+
+spring.datasource.url=jdbc:mariadb://10.0.1.100:3306/sportscars
+spring.datasource.username=caradmin
+spring.datasource.password=caradmin123
+
+spring.jpa.hibernate.ddl-auto=none
+spring.jpa.show-sql=true
+
+
+Or:
+
+spring.datasource.url=jdbc:mysql://10.0.1.100:3306/sportscars
+
+
+depending on the driver.
+
+Step 7: Add MariaDB Driver
+
+Maven:
+
+<dependency>
+    <groupId>org.mariadb.jdbc</groupId>
+    <artifactId>mariadb-java-client</artifactId>
+</dependency>
+
+Step 8: Create an Entity
+@Entity
+@Table(name = "cars")
+public class Car {
+
+    @Id
+    private Integer id;
+
+    private String make;
+    private String model;
+    private Integer year;
+    private Integer horsepower;
+    private Integer topSpeedMph;
+    private BigDecimal priceGbp;
+    private String engineType;
+}
+
+Step 9: Create Repository
+@Repository
+public interface CarRepository
+        extends JpaRepository<Car, Integer> {
+}
+
+Step 10: Test
+
+Access:
+
+carRepository.findAll();
+
+
+You should retrieve the records:
+
+Ferrari 488 GTB
+Porsche 911 Turbo S
+Lamborghini Huracan EVO
+McLaren 720S
+...
+
+
+So from the scope of your YAML, the missing piece is simply:
+
+Install MariaDB on EC2.
+Create the sportscars database.
+Allow Spring servers to reach port 3306.
+Point Spring Boot's datasource URL to the MariaDB EC2 private IP.
+Use the caradmin account to connect.
+
+
+
+
