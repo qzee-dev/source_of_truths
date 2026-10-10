@@ -41,6 +41,7 @@ mysql -u root -ppassword123 -e "GRANT ALL PRIVILEGES ON sportscars.* TO 'caradmi
 
 verify creation:
 mysql -u root -p -e "SELECT User, Host FROM mysql.user WHERE User='caradmin';"
+sudo mariadb -e "SELECT User, Host FROM mysql.user WHERE User='caradmin';"
 
 
 Flush privileges:
@@ -183,6 +184,9 @@ You already have:
 CREATE USER 'caradmin'@'localhost'
 IDENTIFIED BY 'caradmin123';
 
+mysql://caradmin:caradmin123@YOUR_EC2_PUBLIC_IP:3306/sportscars
+mysql -h 16.171.176.37 -P 3306 -u caradmin -p sportscars
+mysql -h 16.171.176.37 -P 3306 -u root -p sportscars
 
 For remote Spring servers:
 
