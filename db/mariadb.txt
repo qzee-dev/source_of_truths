@@ -39,6 +39,9 @@ Grant permissions:
 
 mysql -u root -ppassword123 -e "GRANT ALL PRIVILEGES ON sportscars.* TO 'caradmin'@'localhost';"
 
+verify creation:
+mysql -u root -p -e "SELECT User, Host FROM mysql.user WHERE User='caradmin';"
+
 
 Flush privileges:
 
@@ -155,7 +158,8 @@ Step 4: Configure MariaDB to accept connections
 Edit:
 
 sudo vi /etc/my.cnf
-
+cd   my.cnf.d 
+vim mariadb-server.cnf 
 
 Change:
 
@@ -166,6 +170,7 @@ to:
 
 bind-address=0.0.0.0
 
+ sudo my_print_defaults --mysqld
 
 Restart:
 
