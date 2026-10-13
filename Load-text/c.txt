@@ -1,42 +1,327 @@
-The best way to use the number of concurrent requests for scaling is to convert it into an average per-instance metric and use a [CloudWatch Metric Math](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/using-metric-math.html) expression. [1, 2] 
-If you try to scale based on the raw total number of concurrent requests (e.g., "scale up if total concurrency hits 1,000"), your system will break. Once you scale up from 5 instances to 10 instances, the total concurrency is still 1,000, causing AWS to endlessly scale up until you hit your maximum.
-------------------------------
-## Step 1: Use the Correct Metric Formula
-To prevent endless scaling, you must calculate Average Concurrency Per Instance: [1] 
-$$\text{Average Concurrency} = \frac{\text{Total Concurrent Requests (Active Connections)}}{\text{Number of Healthy Instances}}$$ 
-## Step 2: Implement via AWS Target Tracking
-The most efficient way to configure this in AWS is using an Auto Scaling Target Tracking Policy combined with CloudWatch Metric Math. This tells AWS: "Keep my average concurrent requests per instance at exactly X". [1, 2, 3] 
-You configure the policy with two metrics: [2] 
+# Scaling on Concurrent Requests the Right Way
 
-   1. Metric A (m₁): ActiveConnectionCount (from your Application Load Balancer).
-   2. Metric B (m₂): GroupInServiceInstances (the number of running instances in your Auto Scaling Group).
-   3. Metric Math Expression: m1 / m2 [1, 2] 
+The best way to scale based on concurrent requests is **not** to use the raw total number of concurrent requests. Instead, convert it into an **average per-instance metric** using **CloudWatch Metric Math**.
 
-## Step 3: Find Your Target Scaling Number
-Do not guess the "200" number. Run a quick load test using tools like Apache Bench (ab) or Locust to determine your target:
+If you scale based on the total concurrency alone (for example, "scale up when concurrency reaches 1,000"), you'll create a scaling loop:
 
-* 
-* Under Load: Run 500 concurrent requests against a single EC2 instance.
-* Watch Latency: Note the point where response times (latency) spike or errors begin.
-* Set Safety Buffer: If the instance begins to fail or choke at 300 concurrent requests, set your Target Tracking value to 200. This leaves a 33% safety buffer for traffic spikes while new instances boot up. [4, 5] 
-* 
+- 5 instances handle 1,000 concurrent requests
+- Auto Scaling adds 5 more instances
+- Total concurrency is still 1,000
+- Auto Scaling adds more instances again
+- Scaling continues until the Auto Scaling Group reaches its maximum size
 
-------------------------------
-## 💡 The Alternative: Request Rate (RPS) vs. Concurrency
-According to Little's Law, Concurrency = Throughput × Latency. [6] 
-Because of this relationship, if your application's response time is highly predictable (e.g., it always responds in 50ms), you don't even need to track concurrent connections. You can use the built-in AWS ALBRequestCountPerTarget metric instead. It measures the number of requests per minute hitting an instance and requires zero custom math or configuration. [3, 7, 8] 
+---
 
-* 
-* Use ALBRequestCountPerTarget (RPS) if your requests are fast, short-lived, and uniform.
-* Use Active Connections (Concurrency Math) only if your application handles long-lived requests, like WebSockets, server-sent events, or long-running file uploads. [1, 7] 
-* 
+## Step 1: Use the Correct Metric
 
+Calculate the **Average Concurrent Requests per Instance**:
 
-[1] [https://docs.aws.amazon.com](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/capacity-autoscaling-best-practice.html)
-[2] [https://aws.amazon.com](https://aws.amazon.com/blogs/containers/autoscaling-amazon-ecs-services-based-on-custom-metrics-with-application-auto-scaling/)
-[3] [https://www.youtube.com](https://www.youtube.com/watch?v=1z6a9RcWQj0)
-[4] [https://www.reddit.com](https://www.reddit.com/r/aws/comments/16n2pos/best_metric_for_autoscaling_web_servers/)
-[5] [https://www.youtube.com](https://www.youtube.com/watch?v=XS5S_Y_uYkg&t=338)
-[6] [https://www.instagram.com](https://www.instagram.com/reel/Dd63czRKDmS/)
-[7] [https://docs.aws.amazon.com](https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_PredefinedMetricSpecification.html)
-[8] [https://stackoverflow.com](https://stackoverflow.com/questions/71611390/aws-autoscaling-how-does-the-request-count-per-target-measurement-works)
+```text
+Average Concurrency =
+Total Concurrent Requests / Number of Healthy Instances
+```
+
+Or:
+
+```text
+Average Concurrency =
+ActiveConnectionCount / GroupInServiceInstances
+```
+
+This ensures scaling decisions are based on the load each instance is handling rather than the total load across the fleet.
+
+---
+
+## Step 2: Configure Target Tracking
+
+The recommended AWS approach is:
+
+- Auto Scaling Target Tracking Policy
+- CloudWatch Metric Math
+
+The objective is:
+
+> Keep the average number of concurrent requests per instance at a target value.
+
+### Required Metrics
+
+| Metric | Description |
+|----------|-------------|
+| `m1` | `ActiveConnectionCount` from the Application Load Balancer |
+| `m2` | `GroupInServiceInstances` from the Auto Scaling Group |
+| Expression | `m1 / m2` |
+
+### Example
+
+```text
+m1 = 1000 active connections
+m2 = 5 instances
+
+Average Concurrency = 1000 / 5 = 200
+```
+
+If the target value is **200**, Auto Scaling will add or remove instances to maintain approximately 200 concurrent requests per instance.
+
+---
+
+## Step 3: Determine the Right Target
+
+Avoid guessing a value such as `200`.
+
+Instead, perform a load test.
+
+### Test Procedure
+
+1. Launch a single EC2 instance.
+2. Generate traffic using:
+   - Apache Bench (`ab`)
+   - Locust
+   - k6
+3. Gradually increase concurrency.
+4. Monitor:
+   - Response latency
+   - Error rate
+   - CPU utilization
+   - Memory utilization
+
+### Example Results
+
+| Concurrent Requests | Status |
+|--------------------|---------|
+| 100 | Healthy |
+| 200 | Healthy |
+| 250 | Latency increases |
+| 300 | Errors begin |
+| 350 | Unstable |
+
+If performance starts degrading at **300 concurrent requests**, configure the target value around **200 concurrent requests**.
+
+This provides roughly a **33% safety buffer** while new instances launch.
+
+---
+
+# AWS Configuration Example
+
+## CloudWatch Metric Math
+
+Create a metric math expression:
+
+```text
+m1 = ActiveConnectionCount
+m2 = GroupInServiceInstances
+
+e1 = m1 / m2
+```
+
+Result:
+
+```text
+Average Concurrent Requests Per Instance
+```
+
+---
+
+## Terraform Example
+
+```hcl
+resource "aws_autoscaling_policy" "concurrency_target_tracking" {
+  name                   = "concurrency-target-tracking"
+  policy_type            = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.web_asg.name
+
+  target_tracking_configuration {
+    target_value = 200
+
+    customized_metric_specification {
+      metric_math_specification {
+        expression = "m1/m2"
+        label      = "AverageConcurrency"
+        return_data = true
+
+        metric {
+          id = "m1"
+
+          metric_stat {
+            metric {
+              namespace   = "AWS/ApplicationELB"
+              metric_name = "ActiveConnectionCount"
+
+              dimensions = {
+                LoadBalancer = aws_lb.main.arn_suffix
+              }
+            }
+
+            period = 60
+            stat   = "Average"
+          }
+        }
+
+        metric {
+          id = "m2"
+
+          metric_stat {
+            metric {
+              namespace   = "AWS/AutoScaling"
+              metric_name = "GroupInServiceInstances"
+
+              dimensions = {
+                AutoScalingGroupName = aws_autoscaling_group.web_asg.name
+              }
+            }
+
+            period = 60
+            stat   = "Average"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Scaling Behavior
+
+```text
+1000 active connections / 5 instances = 200
+
+Target = 200
+→ No scaling action
+```
+
+```text
+1400 active connections / 5 instances = 280
+
+Target = 200
+→ Scale out
+```
+
+```text
+600 active connections / 5 instances = 120
+
+Target = 200
+→ Scale in
+```
+
+---
+
+# Alternative: Request Rate (RPS)
+
+Little's Law states:
+
+```text
+Concurrency = Throughput × Latency
+```
+
+If your application has predictable response times, you may not need concurrency-based scaling at all.
+
+AWS provides a built-in metric:
+
+```text
+ALBRequestCountPerTarget
+```
+
+This measures request volume per target and is often simpler than maintaining custom metric math.
+
+---
+
+## When to Use ALBRequestCountPerTarget
+
+✅ REST APIs
+
+✅ Microservices
+
+✅ Stateless applications
+
+✅ Fast and predictable responses
+
+✅ Standard web traffic
+
+### Terraform Example
+
+```hcl
+resource "aws_autoscaling_policy" "requests_per_target" {
+  name                   = "requests-per-target"
+  policy_type            = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.web_asg.name
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+
+      resource_label = "${aws_lb.main.arn_suffix}/${aws_lb_target_group.app.arn_suffix}"
+    }
+
+    target_value = 1000
+  }
+}
+```
+
+---
+
+## When to Use Active Connections
+
+Use concurrency-based scaling when handling long-lived connections such as:
+
+✅ WebSockets
+
+✅ Server-Sent Events (SSE)
+
+✅ Streaming workloads
+
+✅ Long-running uploads
+
+✅ Long-running downloads
+
+✅ Chat applications
+
+✅ Real-time dashboards
+
+In these scenarios, request count alone does not accurately represent instance load.
+
+---
+
+# Recommendation
+
+### Most Web Applications
+
+```text
+Target Tracking
++
+ALBRequestCountPerTarget
+```
+
+Use the built-in AWS metric whenever possible because it is simpler and requires no custom metric math.
+
+### Long-Lived Connections
+
+```text
+Target Tracking
++
+CloudWatch Metric Math
++
+ActiveConnectionCount / GroupInServiceInstances
+```
+
+This provides the most accurate scaling signal for workloads where connections remain open for extended periods.
+
+---
+
+# References
+
+- AWS CloudWatch Metric Math  
+  https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/using-metric-math.html
+
+- Amazon ECS Auto Scaling Best Practices  
+  https://docs.aws.amazon.com/AmazonECS/latest/developerguide/capacity-autoscaling-best-practice.html
+
+- AWS Blog: Autoscaling Based on Custom Metrics  
+  https://aws.amazon.com/blogs/containers/autoscaling-amazon-ecs-services-based-on-custom-metrics-with-application-auto-scaling/
+
+- ALBRequestCountPerTarget Documentation  
+  https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_PredefinedMetricSpecification.html
+
+- AWS Application Load Balancer Metrics  
+  https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-cloudwatch-metrics.html
+
+- Auto Scaling Target Tracking Policies  
+  https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html
