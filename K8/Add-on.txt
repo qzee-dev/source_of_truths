@@ -8,3 +8,52 @@ If your production protocol requires pinned versions, you must use the AWS CLI t
 # Replace "1.31" with your actual EKS Cluster Version
 aws eks describe-addon-versions --kubernetes-version 1.31 --addon-name coredns
 
+
+- CoreDNS
+- kube-proxy
+- Amazon VPC CNI
+- etcd
+- kube-apiserver
+- kube-controller-manager
+- kube-scheduler
+- cloud-controller-manager
+- metrics-server
+- NodeLocal DNSCache
+- Ingress Controller
+- Gateway API Controller
+- cert-manager
+- ExternalDNS
+- Kubernetes Dashboard
+- Cluster Autoscaler
+- Karpenter
+- Amazon EBS CSI Driver
+- Amazon EFS CSI Driver
+- Amazon FSx CSI Driver
+- Snapshot Controller
+- AWS Load Balancer Controller
+- Metrics Server
+- Prometheus
+- Grafana
+- Alertmanager
+- Fluent Bit
+- OpenTelemetry Collector
+- AWS Distro for OpenTelemetry
+- AWS CloudWatch Observability
+- AWS Secrets and Configuration Provider (ASCP) for Secrets Store CSI Driver
+- Secrets Store CSI Driver
+- AWS IAM Authenticator
+- Amazon EKS Pod Identity Agent
+- AWS Node Termination Handler
+- Tigera Calico
+- Cilium
+- Kyverno
+- OPA Gatekeeper
+- Argo CD
+- Flux CD
+- Helm
+- Velero
+- External Secrets Operator
+- KEDA
+- Vertical Pod Autoscaler (VPA)
+- Descheduler
+- Chaos Mesh
