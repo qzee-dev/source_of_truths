@@ -1,0 +1,71 @@
+# Hybrid Database Migration to AWS RDS with DMS and Site-to-Site VPN
+
+## Overview
+This project focused on migrating an on-premises database to Amazon RDS with minimal downtime using AWS Database Migration Service (DMS) and a secure Site-to-Site VPN. The goal was to create a production-ready hybrid architecture that kept the database private, reduced operational risk, and enabled a controlled cutover to AWS.
+
+## Problem
+The organization needed to move a business-critical database from an on-prem environment into AWS without exposing the database to the public internet and without causing unnecessary downtime. The migration needed to be secure, predictable, and operationally safe.
+
+## Solution
+I designed and implemented a private hybrid architecture that included:
+- AWS VPC with segregated app, database, and DMS subnets
+- Site-to-Site VPN using AWS Virtual Private Gateway and on-prem Customer Gateway
+- Private-only networking with routing and network ACL controls
+- AWS DMS configured for full load plus CDC
+- Amazon RDS PostgreSQL in a private DB subnet group
+- Strong security controls, encryption, IAM least privilege, and Secrets Manager usage
+- Terraform state split by environment/layer to reduce blast radius
+
+## Key Technologies
+- AWS VPC
+- AWS Site-to-Site VPN
+- AWS Virtual Private Gateway
+- Amazon RDS
+- AWS DMS
+- KMS Encryption
+- CloudWatch
+- Security Groups
+- Route Tables
+- NACLs
+- Terraform
+- S3 + DynamoDB for remote state
+- Secrets Manager
+
+## Design Highlights
+- Hybrid connectivity through IPsec tunnel
+- Private-only database and DMS access
+- DMS replication in a private subnet
+- Target RDS in Multi-AZ configuration
+- Backup retention and encryption enabled
+- Strict least-privilege network filtering
+- Full-load plus CDC migration pattern to minimize downtime
+- Controlled cutover and rollback strategy
+
+## Production Practices Applied
+- No public database exposure
+- No internet route on database subnet
+- Security groups restricted to approved traffic only
+- Strong IPsec policy with AES256/SHA256
+- KMS encryption and Secrets Manager for sensitive config
+- Remote state in S3 with DynamoDB locking
+- Isolated state files per layer to reduce blast radius
+- Monitoring with CloudWatch alarms and replication lag tracking
+
+## Outcomes
+- Secure private migration path between on-prem and AWS
+- Near-zero downtime cutover strategy
+- RDS target configured for production use
+- DMS replication in place before app cutover
+- Data validation and rollback approach documented
+- Architecture aligned with AWS landing zone and enterprise best practices
+
+## Skills Demonstrated
+- Hybrid cloud architecture
+- Database migration planning
+- AWS networking and routing
+- IPsec/VPN design
+- AWS DMS implementation
+- RDS architecture
+- Security hardening
+- Terraform automation
+- Cloud operations and production readiness
