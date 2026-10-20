@@ -1,7 +1,3 @@
-Below is the complete, consolidated `README.md` file, organized into readable sections with proper Markdown headings, tables, code blocks, and GitHub-compatible checklists. Copy everything inside the document into the root `README.md` of your `terraform-aws-landing-zone` repository.
-
-Writing
-
 # Terraform AWS Landing Zone — Phased Deployment Guide
 
 ## Overview
