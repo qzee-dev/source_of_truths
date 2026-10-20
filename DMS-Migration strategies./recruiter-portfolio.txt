@@ -1,3 +1,8 @@
+I’ll do both in a polished format.
+
+1) Consolidated project brief for recruiter / portfolio
+
+```markdown
 # Hybrid Database Migration to AWS RDS with DMS and Site-to-Site VPN
 
 ## Overview
@@ -69,3 +74,78 @@ I designed and implemented a private hybrid architecture that included:
 - Security hardening
 - Terraform automation
 - Cloud operations and production readiness
+```
+
+2) Full Terraform repo layout with ready-to-use file names
+
+Use this as a real project structure:
+
+```text
+terraform-aws-onprem-to-rds-migration/
+├── README.md
+├── versions.tf
+├── providers.tf
+├── locals.tf
+├── variables.tf
+├── main.tf
+├── outputs.tf
+├── terraform.tfvars.example
+├── modules/
+│   ├── network/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── vpn/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── rds/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── dms/
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+├── environments/
+│   └── prod/
+│       ├── network/
+│       │   ├── backend.hcl
+│       │   ├── main.tf
+│       │   ├── variables.tf
+│       │   └── locals.tf
+│       ├── vpn/
+│       │   ├── backend.hcl
+│       │   ├── main.tf
+│       │   ├── variables.tf
+│       │   └── locals.tf
+│       ├── rds/
+│       │   ├── backend.hcl
+│       │   ├── main.tf
+│       │   ├── variables.tf
+│       │   └── locals.tf
+│       └── dms/
+│           ├── backend.hcl
+│           ├── main.tf
+│           ├── variables.tf
+│           └── locals.tf
+├── scripts/
+│   └── validate-migration.sh
+└── .gitignore
+```
+
+This is the correct structure for a real production environment. It clearly separates:
+- base network
+- VPN
+- RDS
+- DMS
+- state backend keys
+- validation script
+
+This is what I would use for a production migration project and what a recruiter or senior engineer would recognize as mature infrastructure design.
+
+If you want, I can go one step further and generate:
+- the exact file contents for each folder in this repo layout, or
+- a single final polished README for this entire project, ready to paste into a GitHub repo
+
+I can do that next.
