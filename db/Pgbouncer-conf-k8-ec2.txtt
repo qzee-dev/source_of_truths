@@ -1,0 +1,288 @@
+Short answer: yes — for a workload with many short-lived DB connections, PgBouncer can be cheaper and often more flexible than RDS Proxy, especially when you’re already running workloads on EKS or EC2 and want tighter control over pooling. In your repo, the cleanest production pattern is to keep the RDS instance and VPC from `main.tf`, then replace or supplement the current `module "rds_proxy"` with a PgBouncer layer, either:
+- as EC2 nodes behind an internal NLB, or
+- as a Kubernetes deployment/service in EKS.
+
+Important: in this repo today, the database and proxy are already separated cleanly in:
+- `main.tf`
+- `modules/network/main.tf`
+- `modules/database/main.tf`
+- `modules/rds-proxy/main.tf`
+
+So the migration path is straightforward.
+
+1. When PgBouncer is the better choice
+Use PgBouncer when:
+- app opens many short-lived connections
+- you want connection pooling to reduce DB `max_connections`
+- you want control over pool settings
+- you are already in EKS or EC2 and want a pure proxy layer
+- RDS Proxy is too expensive or not flexible enough for your workload
+
+Use RDS Proxy when:
+- you want easiest AWS-native integration
+- you need lower operational overhead
+- connection scale is moderate and not extreme
+
+2. Recommended production architecture
+For both EC2 and EKS, the production shape should be:
+
+- RDS PostgreSQL primary in private DB subnets
+- PgBouncer in private app subnets
+- app layer connects to PgBouncer endpoint
+- PgBouncer connects to RDS using a dedicated DB user
+- no public DB access
+- all traffic inside VPC
+- TLS enabled
+- secrets managed via AWS Secrets Manager
+- 2+ PgBouncer nodes across AZs for HA
+- health checks and autoscaling
+- CloudWatch logs + metrics
+
+This is the pattern I would use in your repo.
+
+3. What to change in this repo
+In `main.tf`, the current block is:
+
+- `module "rds_proxy"` with count based on `var.proxy_enabled`
+
+That is the place to swap from AWS RDS Proxy to PgBouncer.
+
+In production, I would structure it like this:
+
+- keep `module "network"`
+- keep `module "database"`
+- replace `module "rds_proxy"` with either:
+  - `module "pgbouncer_ec2"` for EC2
+  - `module "pgbouncer_eks"` for EKS
+- optionally keep both temporarily during migration
+
+Production-grade idea:
+- keep the DB module as-is
+- create a new `modules/pgbouncer` module
+- expose outputs:
+  - `endpoint`
+  - `security_group_id`
+  - `target_group_arn` if EC2 behind NLB
+- update root outputs and app config to point to PgBouncer
+
+4. Production design: EC2 deployment
+This is the simplest “full prod” deployment if you’re not on Kubernetes.
+
+Architecture:
+- 2–3 PgBouncer EC2 instances in private app subnets
+- each runs PgBouncer as a systemd service
+- internal Network Load Balancer (NLB) in front
+- app connects to NLB DNS name
+- NLB sends traffic to PgBouncer nodes
+- PgBouncer connects to Postgres using `auth_user` and AWS Secrets Manager credentials
+
+Best practices:
+- `pool_mode = transaction` for app services that want transaction pooling
+- `server_reset_query = DISCARD ALL`
+- `max_db_connections` tuned to DB capacity
+- `default_pool_size` sized to application concurrency
+- `reserve_pool` for burst handling
+- `auth_type = scram-sha-256`
+- `server_tls_sslmode = require`
+- `listen_addr = 0.0.0.0`
+- `listen_port = 6432`
+
+Suggested EC2 setup:
+- AMI: Amazon Linux 2023 or Ubuntu 22.04
+- instances in private subnets
+- SG ingress:
+  - app SG -> TCP 6432 to PgBouncer
+  - PgBouncer -> DB SG TCP 5432
+- IAM role:
+  - read Secrets Manager secret containing DB credentials
+- systemd unit:
+  - enable/start `pgbouncer`
+- CloudWatch agent:
+  - metrics for CPU, memory, connections, pool wait
+- Auto Scaling Group:
+  - min 2 / desired 2 / max 4
+- NLB:
+  - internal, private DNS only
+
+Terraform shape for EC2:
+- use `aws_launch_template`
+- `aws_autoscaling_group`
+- `aws_lb` + `aws_lb_target_group`
+- `aws_security_group` for PgBouncer
+- `aws_iam_role` for Secrets Manager access
+- EC2 user_data installs PgBouncer and writes config
+
+Example config approach:
+- `pgbouncer.ini`:
+  - `pool_mode = transaction`
+  - `max_client_conn = 5000`
+  - `default_pool_size = 50`
+  - `reserve_pool_size = 10`
+  - `auth_type = scram-sha-256`
+  - `auth_file = /etc/pgbouncer/userlist.txt`
+  - `server_reset_query = DISCARD ALL`
+  - `listen_port = 6432`
+
+- `userlist.txt`:
+  - DB user credentials for PgBouncer auth
+- `databases.ini`:
+  - `appdb = host=... port=5432 dbname=appdb user=dbadmin`
+- use AWS Secrets Manager to fetch real credentials
+
+5. Production design: EKS deployment
+This is usually the best option if your services are already running in Kubernetes.
+
+Recommended pattern:
+- Deploy PgBouncer as a `Deployment` with 2 replicas
+- put it behind an internal `ClusterIP` service
+- optionally front it with an internal NLB if your apps are outside EKS
+- configure app workloads to connect to `pgbouncer.default.svc.cluster.local:6432`
+- use an AWS Secrets Manager integration via External Secrets or Kubernetes Secret generated from SM
+- enable readiness/liveness probes
+- set resource requests/limits
+- run in private subnets / security groups that only allow app -> pgbouncer -> database traffic
+
+Best EKS layout:
+- `Namespace`: `data-platform` or `platform`
+- `Deployment`:
+  - 2 replicas
+  - anti-affinity across AZs
+  - HPA based on active connections and p99 latency
+- `Service`:
+  - ClusterIP internal only
+- `PodDisruptionBudget`:
+  - minAvailable 1
+- `Ingress`/`NLB` only if needed
+- `ConfigMap` for PgBouncer config
+- `Secret` from AWS Secrets Manager for credentials
+
+Recommended config in EKS:
+- `pool_mode = transaction`
+- `max_db_connections` = 100–200 per node depending on RDS size
+- `default_pool_size` = 25–100 depending on app concurrency
+- `server_idle_timeout = 60`
+- `query_wait_timeout = 120`
+- `ignore_startup_parameters = extra_float_digits`
+
+Important caveat:
+- if your app uses transaction pooling, your app must be prepared for connection pooling semantics
+- avoid combining long-running transactions with pool mode `transaction`
+- for read-heavy workloads, consider separate read and write pools:
+  - write pool to primary
+  - read pool to read replicas
+- if you want to route reads to replicas via PgBouncer, you can configure multiple DB entries and app-specific settings
+
+6. How to implement it in your repo
+I would do this in stages:
+
+Stage A — Keep database and VPC
+- leave `modules/network` and `modules/database`
+- do not disrupt the RDS foundation
+
+Stage B — Add a new PgBouncer module
+Create:
+- `modules/pgbouncer/`
+  - `main.tf`
+  - `variables.tf`
+  - `outputs.tf`
+  - `README.md`
+
+This module should:
+- create security groups
+- create IAM role for Secrets Manager access
+- create NLB / target group if EC2
+- create EKS resources if K8s variant
+- expose endpoint outputs
+
+Stage C — Switch application connection string
+Instead of:
+- `host=...rds.amazonaws.com; port=5432`
+
+use:
+- `host=pgbouncer.internal; port=6432`
+or
+- `host=pgbouncer.default.svc.cluster.local; port=6432`
+
+Stage D — Validate and tune
+- monitor `pg_stat_activity`
+- monitor `pgbouncer` stats
+- check `avg_wait_time`, `pool_size`, `maxwait`
+- bucket by app service
+- tune pool sizes after production load
+
+7. Production requirements checklist
+For full production quality, do all of this:
+- private-only networking
+- HA = 2+ PgBouncer instances
+- target groups + health checks
+- CloudWatch metrics + logs
+- IAM least-privilege for Secrets Manager access
+- DB credentials stored in Secrets Manager, not static tfvars
+- TLS between app and PgBouncer and PgBouncer to Postgres
+- proper `max_connections` sizing on RDS
+- read/write connection routing
+- autoscaling rules
+- deployment does not expose DB directly to internet
+- replication and failover tested
+
+8. My recommendation for this project
+For your repo specifically, I’d choose:
+- If app is mostly EKS:
+  - use PgBouncer in EKS as a dedicated service
+- If app is mostly EC2:
+  - use PgBouncer on EC2 behind internal NLB
+- If you want a quick AWS-native path:
+  - keep RDS Proxy for simplicity
+- If you want more cost efficiency and connection pooling control:
+  - use PgBouncer and retire the `rds_proxy` module
+
+In your current repo, the cleanest strategic move is:
+- keep the existing network and database foundation
+- replace the `rds_proxy` module with a `pgbouncer` module
+- keep the DB as primary + read replicas
+- route all app traffic through PgBouncer
+- maintain the same tagging/governance pattern already present in `local.tf`, `policies/required-tags-scp.json`, and `tests/tagging.tftest.hcl`
+
+9. Concrete step-by-step plan for you
+Here is the exact sequence I would follow:
+
+For EC2:
+1. Keep AWS VPC and DB subnet groups from the repo
+2. Add PgBouncer EC2 public/private config
+3. Create a private NLB
+4. Add ASG with 2 nodes
+5. Install PgBouncer with systemd
+6. Set config:
+   - `pool_mode = transaction`
+   - `auth_type = scram-sha-256`
+   - `max_client_conn = 5000`
+   - `default_pool_size = 50`
+   - `reserve_pool_size = 10`
+7. Export DB password from Secrets Manager
+8. Tests:
+   - app can connect to NLB on 6432
+   - DB sees pooled connections
+   - connection count reduced on RDS
+9. Tune by load
+
+For EKS:
+1. Add namespace and service account
+2. Deploy 2 PgBouncer replicas
+3. Use `ConfigMap`/Secret
+4. Add internal Service
+5. Update DB connection strings in app env vars
+6. Add HPA and PodDisruptionBudget
+7. Add Prometheus/Grafana or CloudWatch metrics
+8. Validate with load test
+9. Tune connection pool numbers
+
+10. One practical note
+PgBouncer is most valuable when your app creates a very large number of short-lived connections. If your app is already using a modest number of persistent DB connections, RDS Proxy may actually be simpler and good enough. So I would not blindly switch; I would benchmark before and after.
+
+If you want, I can do the next step and give you one of these in repo-ready form:
+- A Terraform module for PgBouncer on EC2
+- A Helm/Kubernetes YAML for EKS deployment
+- A migration plan for replacing the current `modules/rds-proxy` in this repo
+- A production-ready `pgbouncer.ini` and `docker-compose`/systemd configuration
+
+If you want the repo version, I can draft the exact Terraform files to replace `modules/rds-proxy` and wire them into `main.tf` in the same style as this project.
