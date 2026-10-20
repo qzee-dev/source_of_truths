@@ -11,3 +11,5 @@ The target RDS instance was configured for production readiness with Multi-AZ de
 This project emphasized production best practices such as private networking, strong security controls, encryption, isolated Terraform state, and operational readiness. It also highlighted the importance of backend state separation to reduce blast radius and improve deployment safety. The overall design was structured to support a controlled migration, secure hybrid connectivity, and reliable production cutover without exposing the environment to unnecessary risk.
 
 This project demonstrates strong cloud architecture skills across networking, database migration, AWS security, private connectivity, automation, and production operations. It is a strong example of enterprise-grade hybrid cloud design and migration planning.
+
+
