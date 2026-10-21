@@ -30,3 +30,14 @@ Verify:
 
 Shell
 terraform version
+
+----------------------------
+Codespace Black-background
+--------------------------------
+Ctrl + Shift + P
+
+Type:
+Color Theme
+
+Select:
+Preferences: Color Theme
