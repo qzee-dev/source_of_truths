@@ -1,0 +1,3 @@
+“I designed a Terraform-based AWS landing zone that establishes the organization’s control plane: separate accounts and OUs, account-scoped deployment roles, centralized state, and a phased, approval-gated rollout. The network model uses isolated VPCs connected through an AWS RAM-shared Transit Gateway, with explicit routes and shared identity/DNS services. I’ve validated the Terraform roots and built the deployment safeguards; production rollout is gated on completing centralized CloudTrail, SCP enforcement, inspection routing, and cross-account DNS.”
+
+That framing highlights the architecture and delivery discipline without suggesting the landing zone has already been deployed to production.
