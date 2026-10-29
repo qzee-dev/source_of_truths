@@ -1,0 +1,65 @@
+When MobaXterm asks for:
+
+Remote Host → your EC2 Public IPv4 Address or Public DNS
+Username → depends on the AMI (Linux image) you launched
+
+Common EC2 usernames:
+
+AMI	UsernameAmazon Linux 2 / Amazon Linux 2023	ec2-user
+Ubuntu	ubuntu
+Debian	admin or debian
+CentOS	centos
+RHEL	ec2-user
+SUSE	ec2-user
+Steps in MobaXterm
+
+EC2 Console → Instances
+
+Copy the Public IPv4 address
+
+Open MobaXterm → Session → SSH
+
+Remote host:
+
+<your-public-ip>
+
+
+Check Specify username
+
+Enter:
+
+ec2-user
+
+
+or
+
+ubuntu
+
+
+depending on your AMI.
+
+Under Advanced SSH settings
+
+Select Use private key
+Browse to your .pem file
+
+Click OK
+
+If connection fails
+
+Verify:
+
+EC2 is in Running state.
+Security Group allows SSH:
+Type: SSH
+Protocol: TCP
+Port: 22
+Source: Your IP (or temporarily 0.0.0.0/0 for testing).
+
+You can tell me:
+
+===============================
+check port
+===================
+i)sudo ss -tulpn | grep :8080
+11)sudo lsof -i :8080 [confirm pid]
