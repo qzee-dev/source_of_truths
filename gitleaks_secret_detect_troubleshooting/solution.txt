@@ -1,0 +1,53 @@
+iIdentify the affected file locally
+- cd fintech-plateform
+- gitleak version 
+
+-1. Install Gitleaks correctly
+Run this command in your Codespace:
+- go install github.com/zricethezav/gitleaks/v8@latest
+
+
+2. Add Go's binary directory to PATH
+After installation, run:
+export PATH="$PATH:$(go env GOPATH)/bin"
+
+
+Verify:
+gitleaks version
+
+
+You should see the installed Gitleaks version.
+3. Make the PATH change permanent
+For Bash:
+echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.bashrc
+source ~/.bashrc
+
+
+4. Run Gitleaks against your fintech-platform repository
+From the repository root:
+cd /workspaces/demo/fintech-platform
+
+
+5. gitleaks detect --source . --verbose
+
+6. gitleaks git . --verbose
+
+7. generate jason report for investigation
+gitleaks git . --report-format json --report-path gitleaks-report.json
+
+
+
+
+8.jq '.[] | {
+  RuleID,
+  Description,
+  File,
+  StartLine,
+  Commit,
+  Fingerprint
+}' gitleaks-report.json
+
+
+
+
+
